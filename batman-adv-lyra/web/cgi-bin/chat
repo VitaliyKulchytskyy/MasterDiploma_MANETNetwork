@@ -1,0 +1,51 @@
+#!/bin/sh
+# Chat over ERL for the web UI, via merld's merlctl (history is in merld's SQLite).
+#   GET  [?limit=N]                       -> the newest N messages (default 100)
+#   POST to=<address|broadcast>&text=...  -> send
+#   POST action=clear                     -> delete the whole history (merlctl chat clear)
+MERLCTL=/usr/local/sbin/merlctl
+
+echo "Content-Type: application/json"
+echo "Cache-Control: no-store"
+echo ""
+
+fail() {
+	printf '{"ok":false,"error":"%s"}\n' "$1"
+	exit 0
+}
+
+[ -x "$MERLCTL" ] || fail "merlctl is not installed"
+
+# value of a field in an application/x-www-form-urlencoded string, URL-decoded
+field() {
+	raw=$(printf '%s' "$1" | tr '&' '\n' | sed -n "s/^$2=//p" | head -n1)
+	busybox httpd -d "$raw"
+}
+
+if [ "$REQUEST_METHOD" != "POST" ]; then
+	limit=$(field "$QUERY_STRING" limit)
+	echo "$limit" | grep -Eqx '[0-9]{1,3}' || limit=100
+	"$MERLCTL" chat list 0 "$limit"
+	exit 0
+fi
+
+[ "${CONTENT_LENGTH:-0}" -gt 0 ] 2>/dev/null && [ "$CONTENT_LENGTH" -le 2048 ] || fail "bad request"
+body=$(head -c "$CONTENT_LENGTH")
+
+if [ "$(field "$body" action)" = clear ]; then
+	"$MERLCTL" chat clear
+	exit 0
+fi
+
+to=$(field "$body" to)
+case "$to" in
+broadcast) ;;
+*) echo "$to" | grep -Eqx '0[xX][0-9A-Fa-f]{1,4}|[0-9]{1,5}' || fail "bad recipient" ;;
+esac
+
+# one line to merld: control characters (newlines would split the command) become spaces,
+# so "line1<newline>line2" does not arrive as "line1line2"
+text=$(field "$body" text | tr '\000-\037\177' ' ')
+[ -n "$text" ] || fail "empty message"
+
+"$MERLCTL" chat send "$to" "$text"

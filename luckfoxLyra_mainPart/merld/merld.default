@@ -1,0 +1,19 @@
+# Installed as /etc/default/merld (only if missing: board-specific)
+# UART wired to the emergency unit's UART_MAIN (RP2040 GP0/GP1), 8N1
+MERL_TTY=/dev/ttyS3
+MERL_BAUDRATE=115200
+# how often network params, position and peers are read
+MERL_POLL_MS=5000
+# compass (firmware with MERL_FEATURE_COMPASS, QMC5883): heading = atan2(y - offset_y,
+# x - offset_x) + declination + rotation. Offsets: turn the unit round once, (max + min) / 2
+# of the raw x and y (merlctl compass get). Declination in degrees, east positive (Kyiv ~ +8).
+# Rotation: how the module is mounted relative to the unit's front, degrees.
+MERL_COMPASS_OFFSET_X=0
+MERL_COMPASS_OFFSET_Y=0
+MERL_COMPASS_DECLINATION=0
+MERL_COMPASS_ROTATION=0
+# INT_ALERT_PIN (GPIO0_B0, named in the device tree): driven high for MERL_ALERT_PULSE_MS on every
+# received message starting with "sos" (any case); the emergency unit then lights its alert.
+# "none" turns it off. Test the wiring: merlctl alert test
+MERL_ALERT_LINE=INT_ALERT_PIN
+MERL_ALERT_PULSE_MS=1000

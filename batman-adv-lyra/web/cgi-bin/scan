@@ -1,0 +1,16 @@
+#!/bin/sh
+# Wi-Fi spectrum for the Node page (wifi-scan on this node).
+#   GET          -> the kept sweeps, oldest first
+#   POST scan    -> one sweep now (~3 s: the radio leaves the mesh channel meanwhile)
+WIFI_SCAN=/usr/local/sbin/wifi-scan
+
+echo "Content-Type: application/json"
+echo "Cache-Control: no-store"
+echo ""
+
+[ -x "$WIFI_SCAN" ] || { echo '{"ok":false,"error":"wifi-scan is not installed"}'; exit 0; }
+if [ "$REQUEST_METHOD" = "POST" ]; then
+	"$WIFI_SCAN"
+else
+	printf '{"ok":true,"sweeps":%s}\n' "$("$WIFI_SCAN" history)"
+fi

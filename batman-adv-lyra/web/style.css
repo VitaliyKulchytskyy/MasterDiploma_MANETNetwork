@@ -1,0 +1,828 @@
+:root {
+	--bg: #f4f5f7;
+	--card: #ffffff;
+	--text: #1b1f24;
+	--muted: #667080;
+	--line: #e3e6ea;
+	--accent: #1f6feb;
+	--ok: #1a7f37;
+	--warn: #b35900;
+	--bad: #cf222e;
+	--sos: #e00000;                 /* a peer that sent SOS: brighter than the weak-link red */
+	color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: #0f1115;
+		--card: #171a21;
+		--text: #e6e8eb;
+		--muted: #8b93a1;
+		--line: #262b35;
+		--accent: #4c8dff;
+		--ok: #3fb950;
+		--warn: #d29922;
+		--bad: #f85149;
+		--sos: #ff2d2d;
+	}
+}
+
+* { box-sizing: border-box; }
+
+body {
+	margin: 0;
+	background: var(--bg);
+	color: var(--text);
+	font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+header {
+	position: sticky;
+	top: 0;
+	z-index: 500;                   /* over the page (maps too), under dialogs and the full screen map (1000) */
+	background: var(--card);
+	border-bottom: 1px solid var(--line);
+	box-shadow: 0 2px 6px rgb(0 0 0 / 12%);
+	padding: 12px 16px 0;
+}
+
+header h1 {
+	margin: 0 0 8px;
+	font-size: 18px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.dot {
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	background: var(--muted);
+}
+.dot.ok { background: var(--ok); }
+.dot.bad { background: var(--bad); }
+
+nav { display: flex; gap: 4px; }
+
+nav a {
+	padding: 8px 12px;
+	color: var(--muted);
+	text-decoration: none;
+	border-bottom: 2px solid transparent;
+}
+nav a.active { color: var(--text); border-color: var(--accent); }
+
+main {
+	max-width: 720px;
+	margin: 0 auto;
+	padding: 16px;
+	display: grid;
+	/* minmax(0, ...): a wide child (the peers table) scrolls inside its card instead of
+	   widening the column, and with it the whole page past the screen */
+	grid-template-columns: minmax(0, 1fr);
+	gap: 16px;
+}
+
+.card {
+	background: var(--card);
+	border: 1px solid var(--line);
+	border-radius: 12px;
+	padding: 16px;
+}
+
+.card h2 {
+	margin: 0 0 12px;
+	font-size: 14px;
+	text-transform: uppercase;
+	letter-spacing: .04em;
+	color: var(--muted);
+}
+
+.stats {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+	gap: 12px;
+}
+
+.stat .label { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 4px; }
+
+/* small icon-only button (the pen next to Mesh IP) */
+.icon-btn {
+	display: inline-flex;
+	padding: 3px;
+	border: 0;
+	border-radius: 6px;
+	background: none;
+	color: var(--muted);
+	cursor: pointer;
+}
+.icon-btn:hover, .icon-btn:focus-visible { color: var(--accent); background: var(--bg); }
+.icon-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+.ip-form, .edit-form { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.form select { font: inherit; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); }
+dt .icon-btn { vertical-align: -3px; }
+/* a checkbox row inside a form: not the grid / full-width input of .form */
+.form .switch-row { display: flex; align-items: flex-start; gap: 8px; }
+.form .switch-row input { width: auto; padding: 0; margin: 3px 0 0; flex: none; }
+.form-buttons { display: flex; gap: 8px; }
+.form-buttons button { flex: 1; }
+.form-buttons .btn-secondary { background: var(--card); color: var(--text); border: 1px solid var(--line); }
+.stat .value { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+dl {
+	margin: 0;
+	display: grid;
+	grid-template-columns: max-content 1fr;
+	gap: 6px 16px;
+}
+dt { color: var(--muted); }
+dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+.peer {
+	display: grid;
+	grid-template-columns: 1fr auto;
+	gap: 4px 12px;
+	padding: 12px 0;
+	border-top: 1px solid var(--line);
+}
+.peer:first-child { border-top: 0; padding-top: 0; }
+.peer.lost { opacity: .5; }
+.peer .name { font-weight: 600; }
+.peer .meta { grid-column: 1 / -1; font-size: 13px; color: var(--muted); }
+.peer a { color: var(--accent); }
+
+.badge {
+	font-size: 12px;
+	padding: 2px 8px;
+	border-radius: 999px;
+	border: 1px solid var(--line);
+	color: var(--muted);
+	white-space: nowrap;
+}
+.badge.direct { color: var(--ok); border-color: var(--ok); }
+
+.bar {
+	height: 6px;
+	border-radius: 3px;
+	background: var(--line);
+	overflow: hidden;
+	grid-column: 1 / -1;
+}
+.bar span { display: block; height: 100%; background: var(--ok); }
+.bar span.mid { background: var(--warn); }
+.bar span.low { background: var(--bad); }
+
+.empty { color: var(--muted); margin: 0; }
+
+footer {
+	text-align: center;
+	color: var(--muted);
+	font-size: 13px;
+	padding: 0 16px 24px;
+}
+
+/* the hidden attribute always hides, whatever display a class gives (.form is a grid...) */
+[hidden] { display: none !important; }
+
+/* one column that may shrink below its widest item (a long <option> text), so fields never
+   push past the card on a narrow phone screen */
+.form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+
+.form label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; min-width: 0; }
+.form input:not([type="checkbox"]), .form select { width: 100%; min-width: 0; }
+.form label span { font-size: 13px; color: var(--muted); }
+
+.form input {
+	font: inherit;
+	font-variant-numeric: tabular-nums;
+	padding: 10px 12px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--bg);
+	color: var(--text);
+}
+.form input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.form button {
+	font: inherit;
+	font-weight: 600;
+	padding: 12px;
+	border: 0;
+	border-radius: 8px;
+	background: var(--accent);
+	color: #fff;
+	cursor: pointer;
+}
+.form button:disabled { opacity: .45; cursor: not-allowed; }
+
+.calc { font-size: 14px; }
+.calc:empty { display: none; }
+
+.problem, .result { margin: 0; font-size: 14px; }
+.problem, .result.bad { color: var(--bad); }
+.result.ok { color: var(--ok); }
+
+dd.good { color: var(--ok); }
+dd.warn { color: var(--warn); }
+
+/* header: internet status right of the title; battery (left) and compass (right) on the line below */
+header h1 { flex-wrap: wrap; row-gap: 2px; }
+.hline {                                /* under the title, past the dot */
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 2px 12px;
+	margin: -4px 0 8px 18px;
+}
+.hline:not(:has(> :not([hidden]))) { display: none; }
+.hline .compass { order: 1; margin-left: auto; }    /* battery left, compass right (under the internet status) */
+.hstatus {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.inet {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	font-size: 13px;
+	font-weight: 600;
+	white-space: nowrap;
+}
+.inet.good { color: var(--ok); }
+.inet.bad { color: var(--bad); }
+.inet.off { color: var(--muted); }
+/* small globe icon, drawn in CSS so it follows the text colour */
+.globe {
+	width: 12px;
+	height: 12px;
+	border: 1.5px solid currentColor;
+	border-radius: 50%;
+	background:
+		linear-gradient(currentColor, currentColor) center / 100% 1.5px no-repeat,
+		radial-gradient(ellipse 35% 100% at center, transparent 88%, currentColor 90%, transparent 100%);
+}
+
+/* compass in the header, and the heading arrows on the peers map */
+.compass {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text);
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+}
+.compass[hidden] { display: none; }
+.src-tag { font-size: 10px; font-weight: 600; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 0 4px; }
+.switch-row { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
+.switch-row input { margin-top: 3px; }
+.rose-ring { fill: var(--card); stroke: var(--line); stroke-width: 1.5; }
+.rose-north { fill: var(--sos); }
+.rose-south { fill: var(--muted); }
+.dir-arrow { fill: var(--text); vertical-align: -1px; }
+.heading-arrow { fill: var(--text); stroke: var(--card); stroke-width: 1.5; paint-order: stroke; }
+.leaflet-div-icon.heading-icon { background: none; border: 0; }
+
+/* battery readout */
+.power {
+	display: flex;
+	gap: 4px;
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+.power span + span::before { content: "·"; margin-right: 4px; color: var(--line); }
+.power.off { color: var(--warn); }
+.power[hidden] { display: none; }
+
+/* ---- peers page ------------------------------------------------------------------------- */
+
+.notice {
+	margin: 0;
+	padding: 10px 12px;
+	border: 1px solid var(--warn);
+	border-radius: 8px;
+	color: var(--warn);
+	font-size: 14px;
+}
+
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.table-wrap { overflow-x: auto; margin: 0 -4px; }
+
+table.peers {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 14px;
+	font-variant-numeric: tabular-nums;
+}
+table.peers th {
+	text-align: left;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--muted);
+	padding: 6px 4px;
+	border-bottom: 1px solid var(--line);
+	white-space: nowrap;
+}
+table.peers td {
+	padding: 8px 4px;
+	border-bottom: 1px solid var(--line);
+	white-space: nowrap;
+}
+table.peers tr:last-child td { border-bottom: 0; }
+table.peers tr.self td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+table.peers td.empty { white-space: normal; }
+
+.rssi { font-weight: 600; }
+.rssi.good { color: var(--ok); }
+.rssi.mid { color: var(--warn); }
+.rssi.low { color: var(--bad); }
+.rssi.none { color: var(--muted); font-weight: 400; }
+
+.map {
+	isolation: isolate;             /* Leaflet's panes (z-index 400-1000) stay inside the map, under the header */
+	height: 320px;
+	border-radius: 8px;
+	overflow: hidden;
+	background: var(--bg);
+}
+.map[hidden] { display: none; }
+
+.plot, .graph {
+	display: block;
+	width: 100%;
+	height: auto;
+	background: var(--bg);
+	border-radius: 8px;
+}
+.plot[hidden] { display: none; }
+
+/* the map card opened over the whole screen (button in its title) */
+.card-head { display: flex; align-items: center; gap: 8px; }
+.card-head h2 { margin-bottom: 0; }
+.card-head + * { margin-top: 12px; }
+.expand-btn {
+	margin-left: auto;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 4px 10px;
+	border: 1px solid var(--line);
+	border-radius: 999px;
+	background: var(--card);
+	color: var(--text);
+	font: inherit;
+	font-size: 13px;
+	font-weight: 600;
+	cursor: pointer;
+}
+.expand-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.map-card.fullscreen {
+	position: fixed;
+	inset: 0;
+	z-index: 1000;
+	margin: 0;
+	border-radius: 0;
+	display: flex;
+	flex-direction: column;
+	padding: 12px;
+}
+.map-card.fullscreen .map { flex: 1; height: auto; min-height: 0; }
+.map-card.fullscreen .plot { flex: 1; min-height: 0; height: 100%; }
+body.no-scroll { overflow: hidden; }
+
+.plot .edge { stroke-dasharray: 6 6; stroke-width: 2; }
+.edge { stroke-linecap: round; }
+.edge.good { stroke: var(--ok); }
+.edge.mid { stroke: var(--warn); }
+.edge.low { stroke: var(--bad); }
+.edge.none { stroke: var(--muted); stroke-dasharray: 4 5; }
+
+.node { stroke: var(--card); stroke-width: 3; }
+.node.self { fill: var(--accent); }
+.node.good { fill: var(--ok); }
+.node.mid { fill: var(--warn); }
+.node.low { fill: var(--bad); }
+.node.none { fill: var(--muted); }
+
+/* a peer that sent SOS (peers page): red, pulsing, labelled */
+.node.sos { fill: var(--sos); animation: sos-pulse 1.2s ease-in-out infinite; }
+.leaflet-interactive.sos-marker { animation: sos-pulse 1.2s ease-in-out infinite; }
+@keyframes sos-pulse {
+	0%, 100% { stroke: var(--card); stroke-width: 3; }
+	50% { stroke: var(--sos); stroke-width: 9; stroke-opacity: 0.45; }
+}
+.node-label.sos { fill: var(--sos); font-weight: 700; }
+.sos-badge {
+	display: inline-block;
+	margin-left: 6px;
+	padding: 1px 6px;
+	border-radius: 999px;
+	background: var(--sos);
+	color: #fff;
+	font: 700 11px/1.4 system-ui, sans-serif;
+	vertical-align: middle;
+}
+table.peers tr.sos td { background: color-mix(in srgb, var(--sos) 12%, transparent); }
+/* the SOS alert above a peer on the map: a red call-out pointing down at it */
+.leaflet-div-icon.sos-icon { background: none; border: 0; }
+.sos-alert {
+	position: absolute;
+	left: 0;
+	bottom: 18px;                   /* clear of the marker (radius 10) and its white ring */
+	transform: translateX(-50%);
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	padding: 3px 9px;
+	border-radius: 8px;
+	background: var(--sos);
+	color: #fff;
+	font: 700 13px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+	white-space: nowrap;
+	box-shadow: 0 2px 6px rgb(0 0 0 / 35%);
+	animation: sos-blink 1.2s ease-in-out infinite;
+}
+.sos-alert::after {                 /* the pointer */
+	content: "";
+	position: absolute;
+	left: 50%;
+	bottom: -6px;
+	margin-left: -6px;
+	border: 6px solid transparent;
+	border-bottom: 0;
+	border-top-color: var(--sos);
+}
+.sos-alert-icon { font-size: 14px; }
+.sos-alert-addr { font-weight: 500; opacity: .9; font-family: ui-monospace, monospace; font-size: 12px; }
+@keyframes sos-blink { 50% { box-shadow: 0 0 0 5px rgb(224 0 0 / 30%); } }
+.sos-note { color: var(--sos); font-weight: 700; }
+
+/* Peers page: the SOS alarm (at least a minute) and its log */
+.alarm {
+	margin: 0 0 16px;
+	padding: 12px 14px;
+	border-radius: 12px;
+	background: var(--sos);
+	color: #fff;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 8px;
+	animation: alarm-flash 1s steps(2, jump-none) infinite;
+}
+@keyframes alarm-flash { 50% { background: #8f0000; } }
+.alarm-item + .alarm-item { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgb(255 255 255 / 35%); }
+.alarm-title { font-size: 18px; font-weight: 800; }
+.alarm-meta { font-size: 13px; opacity: .9; }
+.alarm-text { margin-top: 2px; font-weight: 600; overflow-wrap: anywhere; }
+.alarm-way { margin-top: 6px; font-size: 15px; }
+.alarm-way .dir-arrow { fill: #fff; vertical-align: middle; margin-right: 6px; }
+.alarm-btn {
+	font: inherit;
+	font-size: 13px;
+	font-weight: 700;
+	padding: 5px 10px;
+	border: 1px solid rgb(255 255 255 / 70%);
+	border-radius: 999px;
+	background: rgb(0 0 0 / 15%);
+	color: #fff;
+	cursor: pointer;
+}
+.alarm .link-btn { color: #fff; }
+.link-btn {
+	padding: 0;
+	border: 0;
+	background: none;
+	color: var(--accent);
+	font: inherit;
+	font-size: 13px;
+	font-weight: 600;
+	text-decoration: underline;
+	cursor: pointer;
+}
+/* "Show on map": a pulsing target at the position for a few seconds */
+.leaflet-div-icon.focus-icon { background: none; border: 0; }
+.focus-ping { position: absolute; left: 0; top: 0; }
+.focus-ping span {
+	position: absolute;
+	left: -22px;
+	top: -22px;
+	width: 44px;
+	height: 44px;
+	border: 3px solid var(--accent);
+	border-radius: 50%;
+	animation: focus-ring 1.4s ease-out infinite;
+}
+.focus-ping span + span { animation-delay: .7s; }
+.focus-ping i {                     /* the exact point */
+	position: absolute;
+	left: -5px;
+	top: -5px;
+	width: 10px;
+	height: 10px;
+	border: 2px solid #fff;
+	border-radius: 50%;
+	background: var(--accent);
+	box-shadow: 0 0 0 1px var(--accent);
+}
+@keyframes focus-ring {
+	from { transform: scale(.3); opacity: 1; }
+	to { transform: scale(1.8); opacity: 0; }
+}
+.focus-svg circle { fill: none; stroke: var(--accent); stroke-width: 3; transform-box: fill-box; transform-origin: center;
+	animation: focus-ring 1.4s ease-out infinite; }
+.focus-svg circle.late { animation-delay: .7s; }
+.focus-svg path { stroke: var(--accent); stroke-width: 3; stroke-linecap: round; }
+
+.alarm-log { list-style: none; margin: 0; padding: 0; }
+.alarm-log li { padding: 8px 0 8px 10px; border-left: 3px solid var(--sos); }
+.alarm-log li + li { margin-top: 6px; }
+.alarm-log li.active { background: color-mix(in srgb, var(--sos) 10%, transparent); }
+.alarm-log .small { overflow-wrap: anywhere; }
+.sos-callout path { fill: var(--sos); }
+.sos-callout text { fill: #fff; font: 700 15px system-ui, sans-serif; }
+
+.node-label, .plot-empty {
+	font: 13px system-ui, sans-serif;
+	fill: var(--text);
+	paint-order: stroke;
+	stroke: var(--bg);
+	stroke-width: 4px;
+	stroke-linejoin: round;
+}
+.plot-empty { fill: var(--muted); }
+.node-center { font: 600 12px ui-monospace, monospace; fill: #fff; }
+.edge-label { font: 600 12px system-ui, sans-serif; }
+.edge-pill { fill: var(--card); stroke-width: 1.5; }
+.edge-pill.good { stroke: var(--ok); }
+.edge-pill.mid { stroke: var(--warn); }
+.edge-pill.low { stroke: var(--bad); }
+.edge-pill.none { stroke: var(--muted); }
+.edge-label.good { fill: var(--ok); }
+.edge-label.mid { fill: var(--warn); }
+.edge-label.low { fill: var(--bad); }
+.edge-label.none { fill: var(--muted); }
+.scale { stroke: var(--text); stroke-width: 2; }
+.north { fill: var(--text); }
+
+.legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 10px 0 0; color: var(--muted); }
+.legend > span { white-space: nowrap; }
+.swatch { display: inline-block; width: 18px; height: 4px; border-radius: 2px; vertical-align: middle; margin-right: 2px; }
+.swatch.good { background: var(--ok); }
+.swatch.mid { background: var(--warn); }
+.swatch.low { background: var(--bad); }
+.swatch.none { background: var(--muted); }
+
+/* distance at the middle of a link: an oblong pill, its border in the link's quality colour;
+   see-through, so it does not hide the map under it (a halo keeps the text readable) */
+.leaflet-div-icon.dist-icon { background: none; border: 0; }
+.dist-pill {
+	position: absolute;
+	transform: translate(-50%, -50%);
+	padding: 1px 8px;
+	border: 1.5px solid var(--muted);
+	border-radius: 999px;
+	background: transparent;
+	color: var(--text);
+	font: 700 12px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	text-shadow: 0 0 3px var(--card), 0 0 3px var(--card), 0 0 2px var(--card);
+}
+.dist-pill.good { border-color: var(--ok); }
+.dist-pill.mid { border-color: var(--warn); }
+.dist-pill.low { border-color: var(--bad); }
+.dist-pill-svg rect { fill: none; stroke: var(--muted); stroke-width: 2.5; }
+.dist-pill-svg.good rect { stroke: var(--ok); }
+.dist-pill-svg.mid rect { stroke: var(--warn); }
+.dist-pill-svg.low rect { stroke: var(--bad); }
+.dist-pill-svg text { fill: var(--text); font: 700 18px system-ui, sans-serif; font-variant-numeric: tabular-nums;
+	paint-order: stroke; stroke: var(--card); stroke-width: 5px; stroke-linejoin: round; }
+
+/* ---- chat page -------------------------------------------------------------------------- */
+
+nav { overflow-x: auto; }
+
+.chat-page { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+.chat-page header { flex: none; }
+
+.chat-main {
+	flex: 1;
+	min-height: 0;
+	width: 100%;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding-bottom: 0;
+}
+
+.chat-filter { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.chat-filter select, .composer select {
+	font: inherit;
+	padding: 6px 8px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--card);
+	color: var(--text);
+}
+
+.chat-log {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 4px 2px 12px;
+}
+
+.msg { display: flex; flex-direction: column; max-width: 82%; }
+.msg.in { align-self: flex-start; }
+.msg.out { align-self: flex-end; align-items: flex-end; }
+
+.msg .bubble {
+	padding: 8px 12px;
+	border-radius: 16px;
+	line-height: 1.35;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.msg.in .bubble { background: var(--card); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.msg.out .bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+.msg.bcast.in .bubble { border-color: var(--warn); }
+.msg.failed .bubble { background: transparent; color: var(--bad); border: 1px dashed var(--bad); }
+
+/* the date between the messages of two days (like messenger apps) */
+.day-sep { display: flex; align-items: center; gap: 10px; align-self: stretch; margin: 8px 0 2px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.day-sep::before, .day-sep::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.day-sep span { padding: 2px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); }
+.msg .meta { font-size: 12px; color: var(--muted); padding: 2px 6px; font-variant-numeric: tabular-nums; }
+.msg.failed .st { color: var(--bad); }
+
+.composer {
+	flex: none;
+	display: grid;
+	grid-template-columns: auto 1fr auto;
+	gap: 8px;
+	align-items: center;
+	padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+	background: var(--card);
+	border-top: 1px solid var(--line);
+	max-width: 720px;
+	width: 100%;
+	margin: 0 auto;
+}
+.composer select { max-width: 140px; }
+.composer input {
+	font: inherit;
+	min-width: 0;
+	padding: 10px 12px;
+	border: 1px solid var(--line);
+	border-radius: 20px;
+	background: var(--bg);
+	color: var(--text);
+}
+.composer input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.composer button {
+	font: inherit;
+	font-weight: 600;
+	padding: 10px 16px;
+	border: 0;
+	border-radius: 20px;
+	background: var(--accent);
+	color: #fff;
+	cursor: pointer;
+}
+.composer button:disabled { opacity: .45; cursor: not-allowed; }
+/* quick messages above the composer: one tap, to everyone */
+.quick {
+	flex: none;
+	display: flex;
+	gap: 8px;
+	padding: 8px 16px 0;
+	background: var(--card);
+	border-top: 1px solid var(--line);
+	max-width: 720px;
+	width: 100%;
+	margin: 0 auto;
+}
+.quick button {
+	flex: none;
+	font: inherit;
+	font-size: .88em;
+	font-weight: 700;
+	padding: 5px 12px;
+	border: 0;
+	border-radius: 999px;
+	color: #fff;
+	cursor: pointer;
+}
+.quick-sos { background: var(--sos); }
+.quick-pos { background: var(--accent); }
+.quick button:disabled { opacity: .45; cursor: not-allowed; }
+.quick + .composer { border-top: 0; }
+
+/* ERL page: destructive actions, each behind a confirmation dialog */
+.danger-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.btn-danger {
+	font: inherit;
+	font-weight: 600;
+	padding: 8px 14px;
+	border: 1px solid var(--sos);
+	border-radius: 999px;
+	background: var(--card);
+	color: var(--sos);
+	cursor: pointer;
+}
+.btn-danger:disabled { opacity: .45; cursor: not-allowed; }
+.danger-actions + .result { margin-top: 12px; }
+
+/* confirmation dialogs (Send SOS, clear chat / peers) */
+.modal {
+	position: fixed;
+	inset: 0;
+	z-index: 1000;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 16px;
+	background: rgb(0 0 0 / 55%);
+}
+.modal[hidden] { display: none; }
+.modal-box {
+	width: 100%;
+	max-width: 380px;
+	padding: 20px;
+	border-radius: 16px;
+	background: var(--card);
+	color: var(--text);
+	box-shadow: 0 10px 40px rgb(0 0 0 / 35%);
+}
+.modal-box h2 { margin: 0 0 8px; font-size: 18px; color: var(--sos); }
+.modal-box p { margin: 0 0 12px; }
+.modal-preview {
+	padding: 10px 12px;
+	border-radius: 10px;
+	background: var(--bg);
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+.modal-buttons { display: flex; gap: 8px; margin-top: 16px; }
+.modal-buttons button {
+	flex: 1;
+	font: inherit;
+	font-weight: 700;
+	padding: 12px;
+	border-radius: 12px;
+	cursor: pointer;
+}
+.modal-no { border: 1px solid var(--line); background: var(--card); color: var(--text); }
+.modal-yes { border: 0; background: var(--sos); color: #fff; }
+
+.bytes { grid-column: 2 / 4; font-size: 11px; color: var(--muted); text-align: right; margin-top: -4px; }
+.bytes.over { color: var(--bad); }
+
+/* Node page: Wi-Fi spectrum (a waterfall of scans) */
+.spec-controls { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.spec-controls select { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); }
+.spec-run { font: inherit; font-size: 13px; font-weight: 700; padding: 5px 14px; border: 0; border-radius: 999px; background: var(--accent); color: #fff; cursor: pointer; }
+.spec-run.running { background: var(--sos); }
+.spec-box { position: relative; }
+.spec-canvas { display: block; width: 100%; }
+.spec-canvas + .spec-canvas { margin-top: 4px; }
+.spec-tip { position: absolute; z-index: 2; max-width: 260px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px;
+	background: var(--card); color: var(--text); font-size: 12px; box-shadow: 0 2px 8px rgb(0 0 0 / 20%); pointer-events: none; }
+.spec-legend { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: var(--muted); }
+.spec-scale { width: 140px; height: 10px; border-radius: 3px;
+	background: linear-gradient(90deg, rgb(11 29 81), rgb(31 95 168), rgb(43 179 163), rgb(242 193 78), rgb(226 56 47)); }
+.spec-mesh { margin-left: 12px; padding-left: 14px; position: relative; }
+.spec-mesh::before { content: ""; position: absolute; left: 0; top: 2px; width: 8px; height: 10px; border: 2px solid var(--accent); }
+.spec-none { margin-left: 12px; padding-left: 16px; position: relative; }
+.spec-none::before { content: ""; position: absolute; left: 0; top: 3px; width: 11px; height: 11px; background: var(--line); border-radius: 2px; }
+.card-note { margin-top: 12px; }
+
+/* Test page: download links as pill buttons, the Stop button inside the run form */
+.btn {
+	display: inline-block;
+	font-weight: 600;
+	font-size: 14px;
+	padding: 8px 14px;
+	border: 1px solid var(--accent);
+	border-radius: 999px;
+	color: var(--accent);
+	text-decoration: none;
+}
+p.form-buttons { flex-wrap: wrap; }
+.form .btn-danger { background: var(--card); color: var(--sos); border: 1px solid var(--sos); }

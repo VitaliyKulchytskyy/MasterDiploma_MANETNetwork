@@ -1,0 +1,15 @@
+[Unit]
+Description=Mesh gateway DHCP/DNS: default route + DNS for the other nodes
+Requires=mesh-gw.service
+After=mesh-gw.service
+PartOf=mesh-gw.service
+
+[Service]
+# The nodes keep their static mesh IPs; the lease only tells them the gateway (router
+# option = this node) and DNS (dnsmasq here, forwarding to the uplink's servers).
+ExecStart=/usr/local/sbin/mesh-gw dns
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

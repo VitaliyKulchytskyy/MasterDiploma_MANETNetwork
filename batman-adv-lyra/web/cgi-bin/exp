@@ -1,0 +1,89 @@
+#!/bin/sh
+# Link experiments for the Test page (erl-exp on this node).
+#   GET                        -> status: the run in progress, the kept runs, peers, responder
+#   GET ?action=runs           -> every kept run with all samples (download, for the thesis analysis)
+#   GET ?action=csv            -> one line per run (download)
+#   GET ?action=rx             -> the test messages this node's responder received (one-way delivery)
+#   POST action=start&label=&distance=&mode=low|high&links=wifi,erl
+#   POST action=stop | action=delete&id=<run id>
+ERL_EXP=/usr/local/sbin/erl-exp
+
+json_head() {
+	echo "Content-Type: application/json"
+	echo "Cache-Control: no-store"
+	echo ""
+}
+fail() {
+	json_head
+	printf '{"ok":false,"error":"%s"}\n' "$1"
+	exit 0
+}
+
+[ -x "$ERL_EXP" ] || fail "erl-exp is not installed"
+
+if [ "$REQUEST_METHOD" != "POST" ]; then
+	action=$(echo "$QUERY_STRING" | tr '&' '\n' | sed -n 's/^action=//p' | head -n1)
+	stamp=$(date +%Y%m%d-%H%M)
+	case "$action" in
+	runs)
+		echo "Content-Type: application/json"
+		echo "Content-Disposition: attachment; filename=\"erl-exp-$(hostname)-$stamp.json\""
+		echo ""
+		"$ERL_EXP" runs ;;
+	csv)
+		echo "Content-Type: text/csv"
+		echo "Content-Disposition: attachment; filename=\"erl-exp-$(hostname)-$stamp.csv\""
+		echo ""
+		"$ERL_EXP" csv ;;
+	rx)
+		echo "Content-Type: application/json"
+		echo "Content-Disposition: attachment; filename=\"erl-exp-rx-$(hostname)-$stamp.json\""
+		echo ""
+		"$ERL_EXP" rx ;;
+	*)
+		json_head
+		"$ERL_EXP" status ;;
+	esac
+	exit 0
+fi
+
+[ "${CONTENT_LENGTH:-0}" -gt 0 ] 2>/dev/null && [ "$CONTENT_LENGTH" -le 256 ] || fail "bad request"
+body=$(head -c "$CONTENT_LENGTH")
+field() {
+	# form fields are URL-encoded; decode what the page sends (spaces, the comma in links=wifi,erl);
+	# anything else is dropped by the per-field checks below
+	echo "$body" | tr '&' '\n' | sed -n "s/^$1=//p" | head -n1 | sed 's/+/ /g; s/%2[Cc]/,/g; s/%20/ /g'
+}
+
+json_head
+case "$(field action)" in
+start)
+	label=$(field label | tr -cd 'A-Za-z0-9 ._-' | cut -c1-24)
+	distance=$(field distance)
+	mode=$(field mode)
+	links=$(field links)
+	[ -n "$label" ] || label=P
+	echo "$mode" | grep -Eqx 'low|high' || fail "mode must be low or high"
+	echo "$links" | grep -Eqx '(wifi|erl)(,(wifi|erl))?' || fail "choose Wi-Fi, ERL or both"
+	dist=""
+	if [ -n "$distance" ]; then
+		echo "$distance" | grep -Eqx '[0-9]{1,6}(\.[0-9]+)?' || fail "distance must be a number of metres"
+		dist="--distance-m $distance"
+	fi
+	"$ERL_EXP" status | grep -q '"running": true' && fail "a run is already in progress"
+	# detached: the run outlives this request (several minutes)
+	setsid "$ERL_EXP" run --label "$label" --mode "$mode" --links "$links" $dist </dev/null >/dev/null 2>&1 &
+	printf '{"ok":true}\n'
+	;;
+stop)
+	"$ERL_EXP" stop
+	;;
+delete)
+	id=$(field id)
+	echo "$id" | grep -Eqx '[0-9]{8}-[0-9]{6}' || fail "bad run id"
+	"$ERL_EXP" delete "$id"
+	;;
+*)
+	fail "unknown action"
+	;;
+esac

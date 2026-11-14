@@ -1,0 +1,70 @@
+#!/bin/sh
+# Compass headings of the other mesh nodes, for the peers map. A unit with a compass also sends
+# it over ERL (peer table), but only together with its position (PACKET_TYPE_POSITION, so not
+# without a GPS fix) and raw; a heading calibrated by its node, or a phone's heading for a unit
+# without a compass, only exists in that node's merld: ask every node in the batman mesh (its
+# web UI, cgi-bin/merl) for its ERL address and heading. The answers are cached for a few
+# seconds, the peers page polls every 2 s.
+#   {"ok":true,"nodes":[{"ip":"10.10.0.2","address":"0xCF01","heading":123.4,"cardinal":"SE"}],"updated":...}
+CACHE_DIR=/run/erl
+CACHE=$CACHE_DIR/mesh-compass.json
+SWEEP=$CACHE_DIR/mesh-sweep     # when the mesh subnet was last pinged
+MAX_AGE=4       # seconds
+TIMEOUT=2       # per node
+SWEEP_EVERY=60  # seconds
+
+echo "Content-Type: application/json"
+echo "Cache-Control: no-store"
+echo ""
+
+now=$(date +%s)
+if [ -r "$CACHE" ] && [ $((now - $(stat -c %Y "$CACHE"))) -lt $MAX_AGE ]; then
+	cat "$CACHE"
+	exit 0
+fi
+
+# mesh nodes' IPs from our own status CGI (batman originators mapped to IPs); our own address
+# carries its prefix ("10.10.0.1/24") there, so the pattern leaves it out
+ips=$(QUERY_STRING= "$(dirname "$0")/status" 2>/dev/null | sed '1,/^\r*$/d' |
+	grep -o '"ip":"[0-9.]*"' | cut -d'"' -f4 | sort -u)
+
+# A node's IP is only known once ARP has seen it on bat0: with no traffic to it yet, batman
+# lists it but it has no IP. Then ping the mesh /24 once (in the background, at most every
+# SWEEP_EVERY): the next request finds it.
+nodes_known=$(echo "$ips" | grep -c .)
+nodes_mesh=$(batctl o 2>/dev/null | grep -c '^ *\* ')
+if [ "$nodes_mesh" -gt "$nodes_known" ] &&
+	[ $((now - $(stat -c %Y "$SWEEP" 2>/dev/null || echo 0))) -ge $SWEEP_EVERY ]; then
+	mkdir -p "$CACHE_DIR" && touch "$SWEEP"
+	net=$(ip -4 -o addr show bat0 | awk '{split($4, a, "."); print a[1] "." a[2] "." a[3]; exit}')
+	[ -n "$net" ] && (for i in $(seq 1 254); do ping -c1 -W1 "$net.$i" >/dev/null 2>&1 & done; wait) >/dev/null 2>&1 &
+fi
+
+tmp=$(mktemp -d)
+pids=""
+for ip in $ips; do
+	# one try (GNU wget retries 20 times by default: minutes for an address that does not
+	# answer), and a hard limit on top of -T, which only bounds each network wait
+	timeout $((TIMEOUT + 1)) wget -q -t 1 -T $TIMEOUT -O "$tmp/$ip" "http://$ip/cgi-bin/merl" 2>/dev/null &
+	pids="$pids $!"
+done
+[ -n "$pids" ] && wait $pids     # not the sweep above
+
+nodes=""
+for ip in $ips; do
+	state=$(cat "$tmp/$ip" 2>/dev/null)
+	# the node's own compass: the one after "features" (the peer list before it has a compass
+	# per peer too)
+	compass=$(echo "$state" | grep -o '"features":.*' | grep -o '"compass":{[^}]*}' | head -n1)
+	[ -n "$compass" ] || continue
+	address=$(echo "$state" | grep -o '"network":{"address":"0x[0-9A-Fa-f]*"' | cut -d'"' -f6)
+	heading=$(echo "$compass" | grep -o '"heading":[-0-9.]*' | cut -d: -f2)
+	card=$(echo "$compass" | grep -o '"cardinal":"[A-Z]*"' | cut -d'"' -f4)
+	[ -n "$address" ] && [ -n "$heading" ] || continue
+	nodes="$nodes${nodes:+,}{\"ip\":\"$ip\",\"address\":\"$address\",\"heading\":$heading,\"cardinal\":\"$card\"}"
+done
+rm -rf "$tmp"
+
+mkdir -p "$CACHE_DIR"
+printf '{"ok":true,"nodes":[%s],"updated":%s}\n' "$nodes" "$now" > "$CACHE.tmp" && mv "$CACHE.tmp" "$CACHE"
+cat "$CACHE"

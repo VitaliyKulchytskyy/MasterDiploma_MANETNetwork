@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_background">#1F6FEB</color>
+    <!-- Same palette as the node's web UI (style.css), so the system bars blend with its header -->
+    <color name="bar">#FFFFFF</color>
+    <color name="bg">#F4F5F7</color>
+    <color name="text">#1B1F24</color>
+    <color name="muted">#667080</color>
+</resources>

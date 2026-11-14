@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>ERL Link Test</title>
+	<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+	<header>
+		<h1><span id="dot" class="dot"></span> ERL Link Test<span id="power" class="power" hidden></span></h1>
+		<nav>
+			<a href="/">Node</a>
+			<a href="/mesh.html">Mesh</a>
+			<a href="/peers.html">Peers</a>
+			<a href="/chat.html">Chat</a>
+			<a href="/erl.html">ERL</a>
+			<a href="/info.html">Info</a>
+			<a href="/exp.html" class="active">Test</a>
+		</nav>
+	</header>
+
+	<main>
+		<section class="card">
+			<h2>How it works</h2>
+			<p class="small muted">Leave the other node in place: it answers test messages by itself (the echo
+				responder runs on every node). Carry this node to each test point, enter the point and press Start.
+				Wi-Fi: pings to the other node through the mesh, with signal and link quality every second.
+				ERL: numbered test messages that the other node echoes back. Low load: 100 pings every 1 s and
+				10 messages every 30 s (about 5 min). High load: 1000 pings every 50 ms and 30 messages every 2 s
+				(about 1.5 min).</p>
+			<dl id="peers">
+				<dt>This node</dt><dd id="me">–</dd>
+				<dt>Mesh peer</dt><dd id="mesh-peer">–</dd>
+				<dt>ERL peer</dt><dd id="erl-peer">–</dd>
+				<dt>GPS distance</dt><dd id="gps-dist">–</dd>
+				<dt>Echo responder</dt><dd id="responder">–</dd>
+			</dl>
+		</section>
+
+		<section class="card">
+			<h2>New run</h2>
+			<form id="form" class="form" autocomplete="off">
+				<label>
+					<span>Point label</span>
+					<input id="label" maxlength="24" placeholder="P1" value="P1">
+				</label>
+				<label>
+					<span>Distance, m (empty: GPS)</span>
+					<input id="distance" inputmode="decimal" placeholder="e.g. 250">
+				</label>
+				<label>
+					<span>Load</span>
+					<select id="mode">
+						<option value="low">Low (about 5 min)</option>
+						<option value="high">High (about 1.5 min)</option>
+					</select>
+				</label>
+				<label class="switch-row"><input id="link-wifi" type="checkbox" checked> <span>Wi-Fi mesh</span></label>
+				<label class="switch-row"><input id="link-erl" type="checkbox" checked> <span>ERL (LoRa)</span></label>
+				<div class="form-buttons">
+					<button id="start" type="submit">Start</button>
+					<button id="stop" type="button" class="btn-danger" hidden>Stop</button>
+				</div>
+				<p id="result" class="result" hidden></p>
+			</form>
+		</section>
+
+		<section class="card" id="current-card" hidden>
+			<h2>Current run <span id="cur-title" class="muted small"></span></h2>
+			<dl>
+				<dt>Elapsed</dt><dd id="cur-elapsed">–</dd>
+				<dt>Wi-Fi pings</dt><dd id="cur-wifi">–</dd>
+				<dt>Wi-Fi signal</dt><dd id="cur-wifi-sig">–</dd>
+				<dt>ERL messages</dt><dd id="cur-erl">–</dd>
+				<dt>ERL signal</dt><dd id="cur-erl-sig">–</dd>
+				<dt>GPS distance</dt><dd id="cur-dist">–</dd>
+			</dl>
+		</section>
+
+		<section class="card">
+			<div class="card-head">
+				<h2>Runs <span id="count" class="muted"></span></h2>
+			</div>
+			<div class="table-wrap">
+				<table class="peers">
+					<thead><tr>
+						<th>Point</th><th>Load</th><th>Distance</th>
+						<th>Wi-Fi loss</th><th>RTT</th><th>RSSI</th><th>SNR</th><th>TQ</th>
+						<th>ERL delivered</th><th>ERL RTT</th><th>ERL RSSI</th><th>ERL SNR</th><th>Heartbeats lost</th><th></th>
+					</tr></thead>
+					<tbody id="runs"><tr><td colspan="14" class="empty">Loading…</td></tr></tbody>
+				</table>
+			</div>
+			<p class="form-buttons" style="margin-top:14px">
+				<a class="btn" href="/cgi-bin/exp?action=runs" download>Download data (JSON)</a>
+				<a class="btn" href="/cgi-bin/exp?action=csv" download>Download table (CSV)</a>
+				<a class="btn" href="/cgi-bin/exp?action=rx" download>Received log (JSON)</a>
+			</p>
+			<p class="small muted">The JSON has every sample of every run: download it from this node (and the
+				received log from the fixed one) for the analysis.</p>
+		</section>
+	</main>
+
+	<footer id="updated">Connecting…</footer>
+
+	<script src="/app.js"></script>
+	<script>
+		// Link experiments (erl-exp through cgi-bin/exp): start a run at a test point, watch it, keep the table.
+		let st = null;
+
+		const num = (x, d = 1) => (x == null ? "–" : x.toFixed(d));
+		const pct = (s) => (s ? `${(100 * s.p).toFixed(1)} % <span class="muted small">(${s.k}/${s.n})</span>` : "–");
+		const dist = (s) => {
+			const m = s.distance_m_manual ?? s.distance_m_gps;
+			if (m == null) return "–";
+			return (m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${Math.round(m)} m`) +
+				(s.distance_m_manual == null ? ' <span class="muted small">GPS</span>' : "");
+		};
+		const fmtDist = (m) => (m == null ? "–" : m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${Math.round(m)} m`);
+
+		function render() {
+			$("me").textContent = st.erl ? `ERL ${st.erl}` : "–";
+			const mp = (st.mesh_peers || []).slice().sort((a, b) => b.tq - a.tq)[0];
+			$("mesh-peer").innerHTML = mp ? `${esc(mp.mac)} · link ${tqPercent(mp.tq)} % · seen ${mp.last_seen.toFixed(1)} s ago`
+				: '<span class="muted">none in range</span>';
+			const ep = (st.erl_peers || [])[0];
+			$("erl-peer").innerHTML = ep ? `${esc(ep.address)} · ${ep.rssi} dBm` : '<span class="muted">none heard yet</span>';
+			const own = st.position;
+			const gd = own && ep && ep.latitude != null ? distance(own, ep) : null;
+			$("gps-dist").textContent = gd == null ? "no GPS fix on one of the nodes" : fmtDist(gd);
+			$("responder").textContent = st.responder === "active" ? "active on this node" : `not running (${st.responder})`;
+
+			$("start").hidden = st.running;
+			$("stop").hidden = !st.running;
+
+			const c = st.current;
+			$("current-card").hidden = !c;
+			if (c) {
+				const s = c.summary || {};
+				const w = s.wifi, e = s.erl, p = c.params;
+				$("cur-title").textContent = `${c.label} · ${c.mode}${st.running ? " · running" : " · finished"}`;
+				$("cur-elapsed").textContent = `${Math.round((c.finished || st.now) - c.started)} s`;
+				$("cur-wifi").innerHTML = c.links.includes("wifi")
+					? (c.wifi_error ? esc(c.wifi_error)
+						: `${c.wifi_sent || 0} / ${p.wifi_count} · loss ${w ? pct(w.loss) : "–"} · RTT ${w && w.rtt_ms ? num(w.rtt_ms.mean, 2) : "–"} ms`)
+					: '<span class="muted">not tested</span>';
+				$("cur-wifi-sig").textContent = w ? `RSSI ${w.rssi_dbm ? num(w.rssi_dbm.mean) : "–"} dBm · SNR ${w.snr_db ? num(w.snr_db.mean) : "n/a"} · TQ ${w.tq_pct ? num(w.tq_pct.mean, 0) : "–"} %` : "–";
+				$("cur-erl").innerHTML = c.links.includes("erl")
+					? (c.erl_error ? esc(c.erl_error)
+						: `sent ${c.erl_sent} / ${p.erl_count} · echoed ${e && e.delivery ? e.delivery.k : 0} · RTT ${e && e.rtt_s ? num(e.rtt_s.mean, 2) : "–"} s`)
+					: '<span class="muted">not tested</span>';
+				$("cur-erl-sig").textContent = e && e.rssi_dbm
+					? `RSSI ${num(e.rssi_dbm.mean)} dBm · SNR ${e.snr_db_mean != null ? num(e.snr_db_mean) + " dB" : "n/a"}` +
+					  (e.hb_loss ? ` · heartbeats lost ${(100 * e.hb_loss.p).toFixed(1)} %` : "") +
+					  (e.noise_dbm ? ` · noise ${num(e.noise_dbm.mean, 0)} dBm` : "")
+					: "–";
+				const pos = (c.positions || [])[0];
+				$("cur-dist").textContent = pos ? fmtDist(pos.distance_m) : "–";
+			}
+
+			const runs = (st.runs || []).slice().reverse();
+			$("count").textContent = `(${runs.length})`;
+			$("runs").innerHTML = runs.length ? runs.map((s) => {
+				const w = s.wifi || {}, e = s.erl || {};
+				return `<tr>
+					<td>${esc(s.label)}<div class="muted small mono">${esc(s.id)}</div></td>
+					<td>${esc(s.mode)}</td><td>${dist(s)}</td>
+					<td>${pct(w.loss)}</td><td>${w.rtt_ms ? num(w.rtt_ms.mean, 2) + " ms" : "–"}</td>
+					<td>${w.rssi_dbm ? num(w.rssi_dbm.mean) : "–"}</td><td>${w.snr_db ? num(w.snr_db.mean) : "–"}</td>
+					<td>${w.tq_pct ? num(w.tq_pct.mean, 0) + " %" : "–"}</td>
+					<td>${pct(e.delivery)}</td><td>${e.rtt_s ? num(e.rtt_s.mean, 2) + " s" : "–"}</td>
+					<td>${e.rssi_dbm ? num(e.rssi_dbm.mean) : "–"}</td>
+					<td>${e.snr_db_mean != null ? num(e.snr_db_mean) : "–"}</td><td>${pct(e.hb_loss)}</td>
+					<td><button type="button" class="icon-btn" data-del="${esc(s.id)}" title="Delete this run">✕</button></td>
+				</tr>`;
+			}).join("") : '<tr><td colspan="14" class="empty">No runs yet.</td></tr>';
+		}
+
+		// the same haversine as the peers page
+		function distance(a, b) {
+			const R = 6371000, r = (d) => d * Math.PI / 180;
+			const dLat = r(b.latitude - a.latitude), dLon = r(b.longitude - a.longitude);
+			const h = Math.sin(dLat / 2) ** 2 + Math.cos(r(a.latitude)) * Math.cos(r(b.latitude)) * Math.sin(dLon / 2) ** 2;
+			return 2 * R * Math.asin(Math.sqrt(h));
+		}
+
+		// one status request; poll() repeats it, an action refreshes at once with refresh()
+		async function refresh() {
+			try {
+				const res = await fetch("/cgi-bin/exp", { cache: "no-store" });
+				st = await res.json();
+				setOnline(true);
+				if (st.ok) render();
+				$("updated").textContent = "Updated " + new Date().toLocaleTimeString();
+			} catch (e) {
+				setOnline(false);
+			}
+		}
+		async function poll() {
+			await refresh();
+			setTimeout(poll, POLL_MS);
+		}
+
+		async function post(fields) {
+			const res = await fetch("/cgi-bin/exp", { method: "POST", body: new URLSearchParams(fields) });
+			return res.json();
+		}
+		function result(text, bad) {
+			$("result").hidden = !text;
+			$("result").textContent = text || "";
+			$("result").className = "result" + (bad ? " bad" : "");
+		}
+
+		$("form").addEventListener("submit", async (ev) => {
+			ev.preventDefault();
+			const links = [$("link-wifi").checked && "wifi", $("link-erl").checked && "erl"].filter(Boolean).join(",");
+			if (!links) return result("Choose Wi-Fi, ERL or both.", true);
+			$("start").disabled = true;
+			try {
+				const r = await post({ action: "start", label: $("label").value.trim(), distance: $("distance").value.trim(),
+					mode: $("mode").value, links });
+				result(r.ok ? "Started." : r.error, !r.ok);
+			} catch (e) {
+				result("Node not responding.", true);
+			}
+			$("start").disabled = false;
+		});
+		$("stop").addEventListener("click", async () => {
+			const r = await post({ action: "stop" }).catch(() => ({ ok: false, error: "node not responding" }));
+			result(r.ok ? "Stopping…" : r.error, !r.ok);
+		});
+		$("runs").addEventListener("click", async (ev) => {
+			const b = ev.target.closest("[data-del]");
+			if (!b || !confirm(`Delete run ${b.dataset.del}?`)) return;
+			b.disabled = true;
+			const r = await post({ action: "delete", id: b.dataset.del })
+				.catch(() => ({ ok: false, error: "node not responding" }));
+			result(r.ok ? `Run ${b.dataset.del} deleted` : `Not deleted: ${r.error || "unknown error"}`, !r.ok);
+			b.disabled = false;
+			refresh();
+		});
+
+		poll();
+	</script>
+</body>
+</html>

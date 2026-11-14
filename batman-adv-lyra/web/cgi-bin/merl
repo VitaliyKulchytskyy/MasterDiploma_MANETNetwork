@@ -1,0 +1,51 @@
+#!/bin/sh
+# MERL (emergency unit link) for the web UI, via merld's merlctl.
+#   GET                                      -> merlctl status
+#   POST action=network&address=..&mask=..   -> merlctl network set <address> <mask>
+#   POST action=peers-clear                  -> merlctl peers clear (the unit's peer table)
+MERLCTL=/usr/local/sbin/merlctl
+
+echo "Content-Type: application/json"
+echo "Cache-Control: no-store"
+echo ""
+
+fail() {
+	printf '{"ok":false,"error":"%s"}\n' "$1"
+	exit 0
+}
+
+[ -x "$MERLCTL" ] || fail "merlctl is not installed"
+
+if [ "$REQUEST_METHOD" != "POST" ]; then
+	"$MERLCTL" status
+	exit 0
+fi
+
+# application/x-www-form-urlencoded, small
+[ "${CONTENT_LENGTH:-0}" -gt 0 ] 2>/dev/null && [ "$CONTENT_LENGTH" -le 256 ] || fail "bad request"
+body=$(head -c "$CONTENT_LENGTH")
+
+field() {
+	echo "$body" | tr '&' '\n' | sed -n "s/^$1=//p" | head -n1
+}
+
+# only hex (0x...) or decimal 16-bit numbers reach merlctl
+number() {
+	echo "$1" | grep -Eqx '0[xX][0-9A-Fa-f]{1,4}|[0-9]{1,5}'
+}
+
+case "$(field action)" in
+network)
+	address=$(field address)
+	mask=$(field mask)
+	number "$address" || fail "address must be a 16-bit number, e.g. 0xC701"
+	number "$mask" || fail "subnet mask must be a 16-bit number, e.g. 0xFFE0"
+	"$MERLCTL" network set "$address" "$mask"
+	;;
+peers-clear)
+	"$MERLCTL" peers clear
+	;;
+*)
+	fail "unknown action"
+	;;
+esac

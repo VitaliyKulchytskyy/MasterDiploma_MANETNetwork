@@ -1,0 +1,60 @@
+docs/
+screens/
+
+test_logs/
+experiment_data/
+SBC-Images/
+rp/
+Lyra-sdk/
+
+# ---- build outputs ----
+build/
+out/
+# stock logos used by dt/mkboot.sh are an input, not build output
+!luckfoxLyra_mainPart/dt/orig/res/out/
+cmake-build-*/
+erl-android/.gradle/
+erl-android/.cxx/
+erl-android/local.properties
+*.apk
+*.aab
+
+# Linux kernel module build (batman-adv, usbnet, gadget, libcrc32c, rtw88)
+*.o
+*.ko
+*.mod
+*.mod.c
+.*.cmd
+*.o.d
+Module.symvers
+modules.order
+.tmp_versions/
+.build-kernel*
+
+# RP2040 firmware images
+*.uf2
+*.elf
+*.elf.map
+
+# boot images and DTBs built by luckfoxLyra_mainPart/dt/mkboot.sh
+# (the stock backups boot-board?-orig.img are NOT ignored: they are the only recovery copy)
+luckfoxLyra_mainPart/dt/*.dtb
+luckfoxLyra_mainPart/dt/boot-erl*.img
+luckfoxLyra_mainPart/dt/boot-uart3*.img
+luckfoxLyra_mainPart/dt/new/
+
+# ---- caches ----
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.cache/
+
+# ---- IDE / editor / OS ----
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# ---- LibreOffice lock files ----
+.~lock.*#

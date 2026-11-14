@@ -1,0 +1,11 @@
+[Unit]
+Description=ERL web UI (busybox httpd)
+After=network.target
+
+[Service]
+# Serves on all interfaces: the phone over USB NCM, and other nodes over bat0
+ExecStart=/usr/bin/busybox httpd -f -p 80 -h /var/www/erl -c /etc/erl-httpd.conf
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

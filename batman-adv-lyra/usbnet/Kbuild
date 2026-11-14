@@ -1,0 +1,12 @@
+# Out-of-tree build of the USB host network drivers (CONFIG_USB_NET_DRIVERS is
+# off in the Lyra kernel), so a phone in USB tethering mode shows up as a NIC
+export CONFIG_USB_USBNET=m
+export CONFIG_USB_NET_CDCETHER=m
+export CONFIG_USB_NET_RNDIS_HOST=m
+export CONFIG_USB_NET_CDC_NCM=m
+
+# cdc_ether/rndis_host guard their RNDIS and NCM glue with IS_ENABLED()
+subdir-ccflags-y += -DCONFIG_USB_USBNET_MODULE=1 -DCONFIG_USB_NET_CDCETHER_MODULE=1 \
+		    -DCONFIG_USB_NET_RNDIS_HOST_MODULE=1 -DCONFIG_USB_NET_CDC_NCM_MODULE=1
+
+obj-m += usbnet.o cdc_ether.o rndis_host.o cdc_ncm.o

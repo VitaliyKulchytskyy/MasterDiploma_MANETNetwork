@@ -1,0 +1,25 @@
+#!/bin/sh
+# This node's mesh IP (bat0), for the Node page.
+#   POST ip=10.10.0.3/24  -> mesh-ip set (checked first; applied just after the answer, so a
+#                            page opened over the old mesh address still gets it)
+MESH_IP=/usr/local/sbin/mesh-ip
+
+echo "Content-Type: application/json"
+echo "Cache-Control: no-store"
+echo ""
+
+fail() {
+	printf '{"ok":false,"error":"%s"}\n' "$1"
+	exit 0
+}
+
+[ -x "$MESH_IP" ] || fail "mesh-ip is not installed"
+[ "$REQUEST_METHOD" = "POST" ] || fail "POST only"
+[ "${CONTENT_LENGTH:-0}" -gt 0 ] 2>/dev/null && [ "$CONTENT_LENGTH" -le 64 ] || fail "bad request"
+body=$(head -c "$CONTENT_LENGTH")
+# URL-encoded "/" is %2F
+ip=$(echo "$body" | tr '&' '\n' | sed -n 's/^ip=//p' | head -n1 | sed 's/%2[Ff]/\//')
+
+why=$("$MESH_IP" check "$ip") || fail "$why"
+setsid sh -c "sleep 1; $MESH_IP set '$ip'" >/dev/null 2>&1 < /dev/null &
+printf '{"ok":true,"ip":"%s"}\n' "$ip"

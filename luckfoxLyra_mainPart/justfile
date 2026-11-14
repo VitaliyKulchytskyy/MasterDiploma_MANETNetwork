@@ -1,0 +1,112 @@
+PATH_BUILD_LYRA := "build/lyra"
+PATH_BUILD_HOST := "build/host"
+PATH_LIB_MERL := "../lib/merl"
+BOARD_BIN_DIR := "/usr/local/sbin"
+# merld's chat history (SQLite); the schema is in merld/chat.c, `merld -I` creates/checks it
+BOARD_DB := "/var/lib/merl/chat.db"
+
+# adb target, override with: just serial=<id> <recipe>
+serial := ""
+ADB := if serial == "" { "adb" } else { "adb -s " + serial }
+
+alias b := build
+alias d := deploy
+alias m := merl
+
+default:
+    @just --list
+
+# Cross-build merld + merlctl for the Lyra
+build:
+    cmake -B {{PATH_BUILD_LYRA}} -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/lyra.cmake
+    cmake --build {{PATH_BUILD_LYRA}}
+
+# Build for this PC (tests with the simulated emergency unit)
+build-host:
+    cmake -B {{PATH_BUILD_HOST}} -G Ninja
+    cmake --build {{PATH_BUILD_HOST}}
+
+# MERL library unit tests (host)
+test-lib:
+    cmake -S {{PATH_LIB_MERL}} -B {{PATH_BUILD_HOST}}/merl-test -G Ninja
+    cmake --build {{PATH_BUILD_HOST}}/merl-test
+    {{PATH_BUILD_HOST}}/merl-test/test_merl
+
+# Run merld on this PC against test/fake_unit.py; use merlctl -s /tmp/merld-sim/sock ...
+sim: build-host
+    #!/bin/sh
+    dir=/tmp/merld-sim
+    mkdir -p $dir
+    python3 test/fake_unit.py $dir/tty --push 10 &
+    unit=$!
+    trap 'kill $unit' EXIT
+    sleep 1
+    {{PATH_BUILD_HOST}}/merld -d $dir/tty -s $dir/sock -o $dir/state.json -c $dir/chat.db -v
+
+# The web UI on this PC (http://localhost:8000/) against merld + the simulated unit
+web-sim: build-host
+    #!/bin/sh
+    dir=/tmp/merld-sim
+    mkdir -p $dir
+    python3 test/fake_unit.py $dir/tty --peers 3 &
+    unit=$!
+    sleep 1
+    {{PATH_BUILD_HOST}}/merld -d $dir/tty -s $dir/sock -o $dir/state.json -c $dir/chat.db -p 1000 &
+    merld=$!
+    trap 'kill $unit $merld' EXIT
+    python3 test/web_sim.py --sock $dir/sock
+
+# Install merld + merlctl + ina226d with their services on the board and (re)start them
+deploy: build
+    {{ADB}} shell mkdir -p {{BOARD_BIN_DIR}}
+    {{ADB}} push {{PATH_BUILD_LYRA}}/merld {{PATH_BUILD_LYRA}}/merlctl {{PATH_BUILD_LYRA}}/ina226d {{BOARD_BIN_DIR}}/
+    {{ADB}} shell 'cd {{BOARD_BIN_DIR}} && chown root:root merld merlctl ina226d && chmod 755 merld merlctl ina226d'
+    {{ADB}} push merld/merld.service ina226d/ina226d.service /etc/systemd/system/
+    {{ADB}} shell 'test -f /etc/default/merld' || {{ADB}} push merld/merld.default /etc/default/merld
+    {{ADB}} shell 'test -f /etc/default/ina226d' || {{ADB}} push ina226d/ina226d.default /etc/default/ina226d
+    {{ADB}} shell 'chmod 644 /etc/systemd/system/merld.service /etc/systemd/system/ina226d.service /etc/default/merld /etc/default/ina226d && systemctl daemon-reload && systemctl enable merld.service ina226d.service && systemctl restart merld.service ina226d.service'
+    # flush to the SD card: the board is powered from the USB port, unplugging it cuts power
+    {{ADB}} shell sync
+    # status only: a service still starting must not fail the deploy (or `just update-all`)
+    -{{ADB}} shell 'sleep 2; systemctl is-active merld.service ina226d.service; merlctl status; cat /run/ina226/power.json'
+
+# Create the chat database on the board (merld also does at start) and check it
+db-init:
+    {{ADB}} shell 'mkdir -p /var/lib/merl && merld -I -c {{BOARD_DB}}'
+
+# Chat database: integrity, message count, last id
+db-info:
+    {{ADB}} shell 'merld -I -c {{BOARD_DB}}; ls -la /var/lib/merl'
+
+# Copy the board's chat history to backups/chat-<mesh ip>-<time>.db
+db-backup:
+    #!/bin/sh
+    set -e
+    mkdir -p backups
+    ip=$({{ADB}} shell 'sed -n "s/^MESH_IP=\([0-9.]*\).*/\1/p" /etc/default/mesh 2>/dev/null' | tr -d '\r')
+    out=backups/chat-${ip:-board}-$(date +%Y%m%d-%H%M%S).db
+    # merld stops for a moment: closing the database folds its WAL into chat.db, so one file
+    # holds everything (merld -I also recovers a WAL left by a crash); then check the copy
+    {{ADB}} shell 'systemctl stop merld; merld -I -c {{BOARD_DB}} >/dev/null && cp {{BOARD_DB}} /tmp/chat-backup.db; rc=$?; systemctl start merld; [ $rc = 0 ] && merld -I -c /tmp/chat-backup.db'
+    {{ADB}} pull /tmp/chat-backup.db "$out" >/dev/null
+    {{ADB}} shell 'rm -f /tmp/chat-backup.db*'
+    echo "backup: $out"
+
+# Put a chat history (e.g. from db-backup) on the board; the current one is kept as chat.db.before-restore
+db-restore file:
+    #!/bin/sh
+    set -e
+    test -f "{{file}}" || { echo "no such file: {{file}}" >&2; exit 1; }
+    {{ADB}} push "{{file}}" /tmp/chat-restore.db >/dev/null
+    # refuse a file that is not a sound chat database before touching the board's
+    {{ADB}} shell 'rm -f /tmp/chat-restore.db-wal /tmp/chat-restore.db-shm; merld -I -c /tmp/chat-restore.db' || { {{ADB}} shell 'rm -f /tmp/chat-restore.db*'; exit 1; }
+    {{ADB}} shell 'mkdir -p /var/lib/merl; systemctl stop merld; db={{BOARD_DB}}; if [ -f $db ]; then merld -I -c $db >/dev/null 2>&1; mv $db $db.before-restore; fi; rm -f $db-wal $db-shm; mv /tmp/chat-restore.db $db; rm -f /tmp/chat-restore.db*; sync; systemctl start merld'
+    {{ADB}} shell 'merld -I -c {{BOARD_DB}}'
+
+# Talk to merld on the board: just merl status | just merl send 0xC71F Hello
+merl +args:
+    {{ADB}} shell merlctl {{args}}
+
+# merld log on the board
+log:
+    {{ADB}} shell journalctl -u merld.service -n 50 --no-pager

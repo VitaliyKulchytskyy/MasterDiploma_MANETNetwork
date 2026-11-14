@@ -1,0 +1,238 @@
+# Kernel the modules are built for: stock (Luckfox 6.1.99) or erl (6.1.99-erl with
+# netfilter/NAT for mesh gateways, built from Lyra-sdk/kernel-6.1-erl). Per board:
+#   just serial=<id> kernel=erl deploy
+kernel := "stock"
+PATH_SDK := "../Lyra-sdk"
+PATH_KERNEL := if kernel == "erl" { PATH_SDK + "/kernel-6.1-erl" } else { PATH_SDK + "/kernel" }
+CROSS_COMPILE := `realpath ../Lyra-sdk/prebuilts/gcc/linux-x86/arm/gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf/bin` + "/arm-none-linux-gnueabihf-"
+KVER := if kernel == "erl" { "6.1.99-erl" } else { "6.1.99" }
+PATH_RTW88 := "../rtw88"
+PATH_OUT := "out/" + kernel
+BATCTL_DEB := "batctl_2022.0-1_armhf.deb"
+BATCTL_URL := "http://ports.ubuntu.com/ubuntu-ports/pool/universe/b/batctl/" + BATCTL_DEB
+
+# Board modules/firmware live under /usr/lib (merged-/usr): never untar lib/ onto /
+BOARD_MOD_DIR := "/usr/lib/modules/" + KVER + "/extra"
+BOARD_FW_DIR := "/usr/lib/firmware/rtw88"
+BOARD_BIN_DIR := "/usr/local/sbin"
+BOARD_WEB_DIR := "/var/www/erl"
+
+# adb target, override with: just serial=<id> <recipe>
+serial := ""
+ADB := if serial == "" { "adb" } else { "adb -s " + serial }
+
+alias b := build
+alias d := deploy
+alias u := mesh-up
+alias s := status
+
+default:
+    @just --list
+
+# Build batman-adv.ko + libcrc32c.ko + USB NCM/ECM gadget functions against the SDK kernel
+build:
+    # objects are built in the source dirs: after the other kernel they look up to date but
+    # carry its version magic (the board then refuses them), so start clean on a switch
+    if [ "$(cat .build-kernel 2>/dev/null)" != "{{kernel}}" ]; then just kernel={{kernel}} clean; fi
+    make -C {{PATH_KERNEL}} M=$PWD ARCH=arm CROSS_COMPILE={{CROSS_COMPILE}} -j`nproc` modules
+    make -C {{PATH_KERNEL}} M=$PWD/gadget ARCH=arm CROSS_COMPILE={{CROSS_COMPILE}} -j`nproc` modules
+    mkdir -p {{PATH_OUT}}/gadget
+    {{CROSS_COMPILE}}strip --strip-debug batman-adv/batman-adv.ko -o {{PATH_OUT}}/batman-adv.ko
+    {{CROSS_COMPILE}}strip --strip-debug libcrc32c.ko -o {{PATH_OUT}}/libcrc32c.ko
+    {{CROSS_COMPILE}}strip --strip-debug gadget/usb_f_ncm.ko -o {{PATH_OUT}}/gadget/usb_f_ncm.ko
+    {{CROSS_COMPILE}}strip --strip-debug gadget/usb_f_ecm.ko -o {{PATH_OUT}}/gadget/usb_f_ecm.ko
+    make -C {{PATH_KERNEL}} M=$PWD/usbnet ARCH=arm CROSS_COMPILE={{CROSS_COMPILE}} -j`nproc` modules
+    mkdir -p {{PATH_OUT}}/usbnet
+    for m in usbnet cdc_ether rndis_host cdc_ncm; do \
+        {{CROSS_COMPILE}}strip --strip-debug usbnet/$m.ko -o {{PATH_OUT}}/usbnet/$m.ko; \
+    done
+    echo {{kernel}} > .build-kernel
+
+clean:
+    make -C {{PATH_KERNEL}} M=$PWD ARCH=arm CROSS_COMPILE={{CROSS_COMPILE}} clean
+    make -C {{PATH_KERNEL}} M=$PWD/gadget ARCH=arm CROSS_COMPILE={{CROSS_COMPILE}} clean
+    make -C {{PATH_KERNEL}} M=$PWD/usbnet ARCH=arm CROSS_COMPILE={{CROSS_COMPILE}} clean
+    # only what build makes: the rtw88 driver (driver-build) stays
+    rm -rf {{PATH_OUT}}/*.ko {{PATH_OUT}}/gadget {{PATH_OUT}}/usbnet
+
+# Build rtw88 (RTL8812AU) driver against the SDK kernel
+driver-build:
+    # same as build: rtw88 objects of the other kernel look up to date, start clean on a switch
+    if [ "$(cat .build-kernel-rtw88 2>/dev/null)" != "{{kernel}}" ]; then make -C {{PATH_KERNEL}} M=`realpath {{PATH_RTW88}}` ARCH=arm CROSS_COMPILE={{CROSS_COMPILE}} clean; fi
+    make -C {{PATH_KERNEL}} M=`realpath {{PATH_RTW88}}` ARCH=arm CROSS_COMPILE={{CROSS_COMPILE}} -j`nproc` modules
+    mkdir -p {{PATH_OUT}}/rtw88
+    for m in rtw_core rtw_usb rtw_88xxa rtw_8812a rtw_8812au; do \
+        {{CROSS_COMPILE}}strip --strip-debug {{PATH_RTW88}}/$m.ko -o {{PATH_OUT}}/rtw88/$m.ko; \
+    done
+    echo {{kernel}} > .build-kernel-rtw88
+
+# Push rtw88 modules + firmware to the board (replug the dongle afterwards)
+driver-deploy: driver-build
+    {{ADB}} shell mkdir -p {{BOARD_MOD_DIR}}/rtw88 {{BOARD_FW_DIR}}
+    {{ADB}} push {{PATH_OUT}}/rtw88/. {{BOARD_MOD_DIR}}/rtw88/
+    {{ADB}} push {{PATH_RTW88}}/firmware/rtw8812a_fw.bin {{BOARD_FW_DIR}}/
+    {{ADB}} shell 'chown -R root:root {{BOARD_MOD_DIR}}/rtw88 {{BOARD_FW_DIR}} && chmod 755 {{BOARD_MOD_DIR}}/rtw88 && chmod 644 {{BOARD_MOD_DIR}}/rtw88/*.ko {{BOARD_FW_DIR}}/rtw8812a_fw.bin'
+    {{ADB}} shell depmod -a {{KVER}}
+    # the board is powered from the USB port: moving the cable to the phone cuts power, and
+    # files not yet flushed to the SD card come back empty
+    {{ADB}} shell sync
+
+# Push batman-adv, batctl, mesh + phone-link scripts and the web UI to the board
+deploy: build && web-deploy
+    test -f {{BATCTL_DEB}} || curl -fsSO {{BATCTL_URL}}
+    {{ADB}} shell mkdir -p {{BOARD_MOD_DIR}}/batman-adv
+    {{ADB}} push {{PATH_OUT}}/batman-adv.ko {{PATH_OUT}}/libcrc32c.ko {{BOARD_MOD_DIR}}/batman-adv/
+    {{ADB}} shell 'chown -R root:root {{BOARD_MOD_DIR}}/batman-adv && chmod 755 {{BOARD_MOD_DIR}} {{BOARD_MOD_DIR}}/batman-adv && chmod 644 {{BOARD_MOD_DIR}}/batman-adv/*.ko'
+    {{ADB}} push {{BATCTL_DEB}} /tmp/
+    {{ADB}} shell dpkg -i /tmp/{{BATCTL_DEB}}
+    {{ADB}} push mesh-up.sh {{BOARD_BIN_DIR}}/mesh-up
+    {{ADB}} push mesh-down.sh {{BOARD_BIN_DIR}}/mesh-down
+    {{ADB}} push mesh-gw.sh {{BOARD_BIN_DIR}}/mesh-gw
+    {{ADB}} push mesh-gwclient.sh {{BOARD_BIN_DIR}}/mesh-gwclient
+    {{ADB}} push erl-inet.sh {{BOARD_BIN_DIR}}/erl-inet
+    {{ADB}} push mesh-ip.sh {{BOARD_BIN_DIR}}/mesh-ip
+    {{ADB}} push mesh-radio.sh {{BOARD_BIN_DIR}}/mesh-radio
+    {{ADB}} push wifi-scan.sh {{BOARD_BIN_DIR}}/wifi-scan
+    {{ADB}} shell 'cd {{BOARD_BIN_DIR}} && chmod 755 mesh-up mesh-down mesh-gw mesh-gwclient erl-inet mesh-ip mesh-radio wifi-scan'
+    {{ADB}} shell mkdir -p {{BOARD_MOD_DIR}}/gadget
+    {{ADB}} push {{PATH_OUT}}/gadget/usb_f_ncm.ko {{PATH_OUT}}/gadget/usb_f_ecm.ko {{BOARD_MOD_DIR}}/gadget/
+    {{ADB}} shell 'chown -R root:root {{BOARD_MOD_DIR}}/gadget && chmod 755 {{BOARD_MOD_DIR}}/gadget && chmod 644 {{BOARD_MOD_DIR}}/gadget/*.ko'
+    {{ADB}} shell mkdir -p {{BOARD_MOD_DIR}}/usbnet
+    {{ADB}} push {{PATH_OUT}}/usbnet/. {{BOARD_MOD_DIR}}/usbnet/
+    {{ADB}} shell 'chown -R root:root {{BOARD_MOD_DIR}}/usbnet && chmod 755 {{BOARD_MOD_DIR}}/usbnet && chmod 644 {{BOARD_MOD_DIR}}/usbnet/*.ko'
+    {{ADB}} push 90-erl-tether.conf /etc/NetworkManager/conf.d/90-erl-tether.conf
+    {{ADB}} shell 'chmod 644 /etc/NetworkManager/conf.d/90-erl-tether.conf && nmcli general reload conf'
+    {{ADB}} push usb-ncm.sh {{BOARD_BIN_DIR}}/usb-ncm
+    {{ADB}} push usb-uplink.sh {{BOARD_BIN_DIR}}/usb-uplink
+    {{ADB}} shell chmod 755 {{BOARD_BIN_DIR}}/usb-ncm {{BOARD_BIN_DIR}}/usb-uplink
+    {{ADB}} push mesh.service mesh-gw.service mesh-gw-dns.service mesh-gwclient.service erl-inet.service usb-ncm.service usb-ncm-dhcp.service usb-uplink.service erl-web.service /etc/systemd/system/
+    {{ADB}} shell 'cd /etc/systemd/system && chmod 644 mesh.service mesh-gw.service mesh-gw-dns.service mesh-gwclient.service erl-inet.service usb-ncm.service usb-ncm-dhcp.service usb-uplink.service erl-web.service && systemctl daemon-reload && systemctl enable erl-inet.service && systemctl restart erl-inet.service'
+    # the phone's Ethernet tethering as uplink goes with the phone link
+    {{ADB}} shell 'if systemctl is-enabled -q usb-ncm.service; then systemctl enable usb-uplink.service && systemctl restart usb-uplink.service; fi'
+    {{ADB}} push 90-erl-mesh.rules /etc/udev/rules.d/90-erl-mesh.rules
+    {{ADB}} shell 'chmod 644 /etc/udev/rules.d/90-erl-mesh.rules && udevadm control --reload'
+    {{ADB}} shell 'umask 022 && mkdir -p /etc/systemd/journald.conf.d /var/log/journal'
+    {{ADB}} push erl-journald.conf /etc/systemd/journald.conf.d/erl.conf
+    {{ADB}} shell 'chmod 644 /etc/systemd/journald.conf.d/erl.conf && systemctl restart systemd-journald'
+    {{ADB}} shell 'umask 022 && mkdir -p /etc/systemd/timesyncd.conf.d'
+    {{ADB}} push erl-timesyncd.conf /etc/systemd/timesyncd.conf.d/erl.conf
+    # NTP on (the clock is only right after a sync: no RTC); erl-inet nudges it when online
+    {{ADB}} shell 'chmod 644 /etc/systemd/timesyncd.conf.d/erl.conf && timedatectl set-ntp true && systemctl restart systemd-timesyncd'
+    {{ADB}} push 90-erl.conf /etc/sysctl.d/90-erl.conf
+    {{ADB}} shell 'chmod 644 /etc/sysctl.d/90-erl.conf && sysctl -p /etc/sysctl.d/90-erl.conf'
+    {{ADB}} shell depmod -a {{KVER}}
+    just serial={{serial}} exp-deploy
+
+# Link experiments only (no rebuild): erl-exp and its echo responder service; the Test page is in web/
+exp-deploy:
+    {{ADB}} push erl-exp.py {{BOARD_BIN_DIR}}/erl-exp
+    {{ADB}} push erl-exp-responder.service /etc/systemd/system/erl-exp-responder.service
+    {{ADB}} shell 'chmod 755 {{BOARD_BIN_DIR}}/erl-exp && chmod 644 /etc/systemd/system/erl-exp-responder.service && mkdir -p /var/lib/erl-exp && systemctl daemon-reload && systemctl enable erl-exp-responder.service && systemctl restart erl-exp-responder.service'
+    {{ADB}} shell sync
+
+# Push web/ to the board's web root (no rebuild)
+web-deploy:
+    # busybox httpd sends no cache headers, so browsers / the app's WebView may keep an old
+    # style.css or app.js: the pages link them with a content hash (?v=...), new on every change
+    rm -rf out/web && mkdir -p out && cp -r web out/web
+    v=$(cat web/style.css web/app.js | md5sum | cut -c1-10) && sed -i "s#\(href\|src\)=\"/\(style\.css\|app\.js\)\"#\1=\"/\2?v=$v\"#g" out/web/*.html
+    {{ADB}} shell 'umask 022 && rm -rf {{BOARD_WEB_DIR}} && mkdir -p {{BOARD_WEB_DIR}} && chmod 755 /var/www'
+    {{ADB}} push out/web/. {{BOARD_WEB_DIR}}/
+    {{ADB}} push erl-httpd.conf /etc/erl-httpd.conf
+    {{ADB}} shell 'chown -R root:root {{BOARD_WEB_DIR}} && find {{BOARD_WEB_DIR}} -type d -exec chmod 755 {} + && find {{BOARD_WEB_DIR}} -type f -exec chmod 644 {} + && chmod 755 {{BOARD_WEB_DIR}}/cgi-bin/* && chmod 644 /etc/erl-httpd.conf'
+    # httpd keeps its cwd in the web root, which was just replaced
+    {{ADB}} shell systemctl try-restart erl-web.service
+    # flush to the SD card before the cable (and power) moves to the phone
+    {{ADB}} shell sync
+
+# Phone link: USB NCM (next to adb + rndis) + DHCP + web UI, now and at boot.
+# Re-enumerates the USB gadget, so adb drops for a few seconds.
+phone-enable:
+    {{ADB}} shell 'systemctl enable usb-ncm.service usb-ncm-dhcp.service usb-uplink.service erl-web.service && systemctl start erl-web.service && systemd-run --no-block --on-active=1 systemctl start usb-ncm-dhcp.service usb-uplink.service'
+    sleep 5
+    {{ADB}} wait-for-device
+    {{ADB}} shell 'systemctl is-active usb-ncm.service usb-ncm-dhcp.service usb-uplink.service erl-web.service; ip -br addr | grep 192.168.7'
+
+# Pick the phone link's USB Ethernet class: ecm (default, older Android, iOS,
+# macOS, Linux) or ncm (Windows). Saved for boot; adb drops for a few seconds.
+phone-fn fn:
+    {{ADB}} shell "printf 'PHONE_FN=%s\n' {{fn}} > /etc/default/usb-phone && chmod 644 /etc/default/usb-phone && systemd-run --no-block --on-active=1 systemctl restart usb-ncm.service"
+    sleep 6
+    {{ADB}} wait-for-device
+    {{ADB}} shell 'systemctl is-active usb-ncm.service usb-ncm-dhcp.service; journalctl -u usb-ncm.service -n 1 --no-pager -o cat'
+
+# Remove the phone link (adb drops for a few seconds)
+phone-disable:
+    {{ADB}} shell 'systemctl disable usb-ncm.service usb-ncm-dhcp.service usb-uplink.service erl-web.service && systemctl stop erl-web.service usb-ncm-dhcp.service usb-uplink.service && systemd-run --no-block --on-active=1 systemctl stop usb-ncm.service'
+    sleep 5
+    {{ADB}} wait-for-device
+
+# Start mesh node: just mesh-up 10.10.0.1/24 [server|client|off]
+mesh-up ip gw="off":
+    {{ADB}} shell {{BOARD_BIN_DIR}}/mesh-up {{ip}} {{gw}}
+
+# Stop mesh, hand the dongle back to NetworkManager
+mesh-down:
+    {{ADB}} shell {{BOARD_BIN_DIR}}/mesh-down
+
+# Start mesh at boot: just mesh-enable [ip/prefix] [server|client|off] [txpower-dBm]
+# Without ip, keeps the board's current bat0 address; txpower caps TX (weak USB power)
+mesh-enable ip="" gw="off" txpower="":
+    #!/bin/sh
+    set -e
+    ip="{{ip}}"
+    [ -n "$ip" ] || ip=$({{ADB}} shell 'ip -4 -o addr show bat0 2>/dev/null' | awk '{print $4}' | head -n1)
+    [ -n "$ip" ] || { echo "bat0 has no address; pass one: just mesh-enable 10.10.0.X/24" >&2; exit 1; }
+    # MESH_FREQ (the channel, set in the web UI) is kept
+    {{ADB}} shell "f=\$(grep '^MESH_FREQ=' /etc/default/mesh 2>/dev/null); printf 'MESH_IP=%s\nMESH_GW=%s\nMESH_TXPOWER=%s\n' $ip {{gw}} '{{txpower}}' > /etc/default/mesh && { [ -z \"\$f\" ] || echo \"\$f\" >> /etc/default/mesh; } && chmod 644 /etc/default/mesh"
+    {{ADB}} shell systemctl enable mesh.service
+    # gateway role: server = NAT to this node's uplink + DHCP/DNS for the mesh (needs kernel=erl),
+    # client = default route + DNS via the best mesh gateway
+    case "{{gw}}" in
+    server) {{ADB}} shell 'systemctl disable --now mesh-gwclient.service 2>/dev/null; systemctl enable mesh-gw.service mesh-gw-dns.service' ;;
+    client) {{ADB}} shell 'systemctl disable --now mesh-gw.service mesh-gw-dns.service 2>/dev/null; systemctl enable mesh-gwclient.service' ;;
+    *) {{ADB}} shell 'systemctl disable --now mesh-gw.service mesh-gw-dns.service mesh-gwclient.service 2>/dev/null; true' ;;
+    esac
+    echo "mesh at boot: $ip (gw_mode {{gw}}{{ if txpower != "" { ", txpower " + txpower + " dBm" } else { "" } }})"
+
+# Stop starting the mesh at boot (current mesh keeps running)
+mesh-disable:
+    {{ADB}} shell systemctl disable mesh.service
+
+# Mesh state: interfaces, neighbours, originators, gateways
+# apt packages of a node (fresh image: run this before deploy). dev=--dev adds debug tools.
+# The board needs internet (mesh gateway, Wi-Fi, ...); without it use packages-offline.
+packages dev="": packages-push
+    {{ADB}} shell 'board-packages install {{dev}}'
+    {{ADB}} shell sync
+
+# Which of the node's packages are installed (with versions) and which are missing
+packages-check: packages-push
+    {{ADB}} shell board-packages check
+
+# Download every .deb a node needs (from a board WITH internet) into packages/debs
+packages-bundle dev="": packages-push
+    {{ADB}} shell 'rm -rf /tmp/erl-debs && board-packages bundle /tmp/erl-debs {{dev}}'
+    rm -rf packages/debs && mkdir -p packages
+    {{ADB}} pull /tmp/erl-debs packages/debs
+    {{ADB}} shell rm -rf /tmp/erl-debs
+
+# Install packages/debs (from packages-bundle) on a board without internet
+packages-offline: packages-push
+    test -n "$(ls packages/debs/*.deb 2>/dev/null)" || { echo "no packages/debs: run just packages-bundle on a board with internet" >&2; exit 1; }
+    {{ADB}} shell 'rm -rf /tmp/erl-debs && mkdir -p /tmp/erl-debs'
+    {{ADB}} push packages/debs/. /tmp/erl-debs/
+    {{ADB}} shell 'board-packages offline /tmp/erl-debs; rm -rf /tmp/erl-debs; sync'
+
+[private]
+packages-push:
+    {{ADB}} push board-packages.sh {{BOARD_BIN_DIR}}/board-packages >/dev/null
+    {{ADB}} shell chmod 755 {{BOARD_BIN_DIR}}/board-packages
+
+status:
+    {{ADB}} shell 'iw dev; batctl if; echo "--- neighbours"; batctl n; echo "--- originators"; batctl o; echo "--- gateways"; batctl gwl'
+
+devices:
+    adb devices -l
+
+bd: build deploy

@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>ERL Node</title>
+	<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+	<header>
+		<h1><span id="dot" class="dot"></span> <span id="title">ERL Node</span><span id="power" class="power" hidden></span></h1>
+		<nav>
+			<a href="/" class="active">Node</a>
+			<a href="/mesh.html">Mesh</a>
+			<a href="/peers.html">Peers</a>
+			<a href="/chat.html">Chat</a>
+			<a href="/erl.html">ERL</a>
+			<a href="/info.html">Info</a>
+			<a href="/exp.html">Test</a>
+		</nav>
+	</header>
+
+	<main>
+		<section class="card">
+			<h2>Overview</h2>
+			<div class="stats">
+				<div class="stat">
+					<div class="label">Mesh IP
+						<button id="ip-edit" type="button" class="icon-btn" title="Change the mesh IP" aria-label="Change the mesh IP">
+							<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11.3 1.7a1 1 0 0 1 1.4 0l1.6 1.6a1 1 0 0 1 0 1.4L5.6 13.4 2 14l.6-3.6z M10 3l3 3"/></svg>
+						</button>
+					</div>
+					<div class="value" id="ip">–</div>
+				</div>
+				<div class="stat"><div class="label">Nodes in mesh</div><div class="value" id="nodes">–</div></div>
+				<div class="stat"><div class="label">Direct neighbours</div><div class="value" id="neigh">–</div></div>
+				<div class="stat"><div class="label">Uptime</div><div class="value" id="uptime">–</div></div>
+			</div>
+			<form id="ip-form" class="form ip-form" autocomplete="off" hidden>
+				<label>
+					<span>New mesh IP (address/prefix)</span>
+					<input id="ip-input" inputmode="decimal" placeholder="10.10.0.3/24" spellcheck="false" required>
+				</label>
+				<p class="muted small">Every node of the mesh needs its own address in the same subnet. The node
+					moves to it at once and keeps it after a reboot.</p>
+				<p id="ip-problem" class="problem" hidden></p>
+				<div class="form-buttons">
+					<button id="ip-cancel" type="button" class="btn-secondary">Cancel</button>
+					<button id="ip-save" type="submit">Save</button>
+				</div>
+				<p id="ip-result" class="result" hidden></p>
+			</form>
+			<p id="ip-note" class="result card-note" hidden></p>
+		</section>
+
+		<section class="card">
+			<h2>Internet</h2>
+			<dl>
+				<dt>Status</dt><dd id="net-status">–</dd>
+				<dt>Connection</dt><dd id="net-route">–</dd>
+				<dt>Gateway role</dt><dd id="net-role">–</dd>
+				<dt>DNS</dt><dd id="net-dns">–</dd>
+				<dt>Last check</dt><dd id="net-checked">–</dd>
+				<dt>Clock</dt><dd id="net-clock">–</dd>
+			</dl>
+		</section>
+
+		<section class="card">
+			<h2>Radio</h2>
+			<dl>
+				<dt>Interface</dt><dd id="if">–</dd>
+				<dt>Mode</dt><dd id="mode">–</dd>
+				<dt>Network</dt><dd id="ssid">–</dd>
+				<dt>Channel <button id="chan-edit" type="button" class="icon-btn" title="Change the mesh channel" aria-label="Change the mesh channel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11.3 1.7a1 1 0 0 1 1.4 0l1.6 1.6a1 1 0 0 1 0 1.4L5.6 13.4 2 14l.6-3.6z M10 3l3 3"/></svg></button></dt><dd id="chan">–</dd>
+				<dt>TX power <button id="txp-edit" type="button" class="icon-btn" title="Limit the TX power" aria-label="Limit the TX power"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11.3 1.7a1 1 0 0 1 1.4 0l1.6 1.6a1 1 0 0 1 0 1.4L5.6 13.4 2 14l.6-3.6z M10 3l3 3"/></svg></button></dt><dd id="txp">–</dd>
+				<dt>Gateway mode</dt><dd id="gw">–</dd>
+			</dl>
+			<form id="chan-form" class="form edit-form" autocomplete="off" hidden>
+				<label>
+					<span>Mesh channel</span>
+					<select id="chan-select"></select>
+				</label>
+				<label class="switch-row"><input type="checkbox" id="chan-all" checked>
+					Switch every node of the mesh together</label>
+				<p class="muted small">Nodes on different channels cannot hear each other: a node switched alone
+					leaves the mesh. With the box ticked, every node this one can reach switches at the same
+					moment, a few seconds from now. Only channels the radio rules allow here are listed.</p>
+				<div class="form-buttons">
+					<button id="chan-cancel" type="button" class="btn-secondary">Cancel</button>
+					<button id="chan-save" type="submit">Switch channel</button>
+				</div>
+				<p id="chan-result" class="result" hidden></p>
+			</form>
+			<form id="txp-form" class="form edit-form" autocomplete="off" hidden>
+				<label>
+					<span>TX power limit (this node)</span>
+					<select id="txp-select"></select>
+				</label>
+				<p class="muted small">Less power: shorter range, but a smaller current spike on a weak USB
+					supply. Kept after a reboot.</p>
+				<div class="form-buttons">
+					<button id="txp-cancel" type="button" class="btn-secondary">Cancel</button>
+					<button id="txp-save" type="submit">Save</button>
+				</div>
+				<p id="txp-result" class="result" hidden></p>
+			</form>
+			<p id="radio-note" class="result card-note" hidden></p>
+		</section>
+
+		<section class="card">
+			<div class="card-head">
+				<h2>Wi-Fi spectrum</h2>
+				<div class="spec-controls">
+					<select id="spec-band" aria-label="Band">
+						<option value="all">2.4 + 5 GHz</option>
+						<option value="24">2.4 GHz</option>
+						<option value="5">5 GHz</option>
+					</select>
+					<select id="spec-every" aria-label="Sweep every">
+						<option value="0">continuous</option>
+						<option value="10">every 10 s</option>
+						<option value="30">every 30 s</option>
+						<option value="60">every 60 s</option>
+					</select>
+					<button id="spec-run" type="button" class="spec-run">Start</button>
+				</div>
+			</div>
+			<p class="muted small">Each sweep scans every allowed channel and takes the radio off the mesh
+				channel for about 3 s: mesh traffic pauses meanwhile. Colour: the strongest signal on a channel.</p>
+			<div id="spec-box" class="spec-box">
+				<canvas id="spec-bars" class="spec-canvas" aria-label="Latest sweep: strongest signal per channel"></canvas>
+				<canvas id="spec-fall" class="spec-canvas" aria-label="Waterfall: one row per sweep, newest on top"></canvas>
+				<p id="spec-empty" class="empty">No sweeps yet: press Start.</p>
+				<div id="spec-tip" class="spec-tip" hidden></div>
+			</div>
+			<div class="spec-legend small"><span>−95 dBm</span><span class="spec-scale"></span><span>−30 dBm</span>
+				<span class="spec-mesh">mesh channel</span><span class="spec-none">nothing heard</span></div>
+			<p id="spec-status" class="small muted"></p>
+		</section>
+	</main>
+
+	<footer id="updated">Connecting…</footer>
+
+	<script src="/app.js"></script>
+	<script>
+		onInternet((i) => {
+			const [text, cls] = inetLabel(i);
+			$("net-status").textContent = i.online ? `online${i.latency_ms != null ? ` · ${i.latency_ms} ms` : ""}${i.dns === false ? " · DNS failing" : ""}` : text;
+			$("net-status").className = cls === "good" ? "good" : cls === "bad" ? "warn" : "";
+			$("net-route").textContent = i.uplink
+				? `${{ phone: "Phone (USB tethering)", "phone-eth": "Phone (Ethernet tethering)", pc: "PC (USB)" }[i.uplink.kind] || i.uplink.kind} on ${i.uplink.dev}${i.uplink.address ? `, ${i.uplink.address}` : ""}`
+				: i.gateway ? `Mesh gateway ${i.gateway}` : "none";
+			const roles = {
+				server: i.announced ? "gateway, sharing its uplink with the mesh"
+					: i.gateway ? `gateway without an uplink: uses mesh gateway ${i.gateway} until it has one`
+					: "gateway, waiting for an uplink (not announced): turn on Ethernet tethering on the phone",
+				client: "uses mesh gateways",
+				off: "off",
+			};
+			$("net-role").textContent = roles[i.role] || "–";
+			$("net-dns").textContent = (i.nameservers || []).join(", ") || "–";
+			$("net-checked").textContent = i.checked ? new Date(i.checked * 1000).toLocaleTimeString() : "–";
+			// no RTC on the board: its clock is only right after an NTP sync
+			$("net-clock").textContent = !i.clock ? "–" : i.clock.synced
+				? `synced via NTP${i.clock.server ? ` (${i.clock.server})` : ""}` : "not synced yet (needs internet)";
+			$("net-clock").className = i.clock && !i.clock.synced ? "warn" : "";
+		});
+
+		// ---- mesh IP: a.b.c.d/nn, same rules as mesh-ip on the board ----------------------------
+		let meshIp = null;          // the node's current one, from the status poll
+		function ipProblem(text) {
+			const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/.exec(text.trim());
+			if (!m) return "Use the form a.b.c.d/nn, e.g. 10.10.0.3/24.";
+			const parts = m.slice(1, 5);
+			if (parts.some((p) => p.length > 1 && p[0] === "0")) return "No leading zeros in the address.";
+			if (parts.some((p) => Number(p) > 255)) return "Each part of the address must be 0..255.";
+			const prefix = Number(m[5]);
+			if (prefix < 8 || prefix > 30) return "The prefix must be 8..30.";
+			const value = parts.reduce((v, p) => v * 256 + Number(p), 0);
+			const hostMask = 2 ** (32 - prefix) - 1;
+			const host = value % (hostMask + 1);
+			if (host === 0) return "That is the subnet's own address, pick another host.";
+			if (host === hostMask) return "That is the subnet's broadcast address, pick another host.";
+			if (text.trim() === meshIp) return "That is the current address.";
+			return null;
+		}
+		function ipCheck() {
+			const problem = ipProblem($("ip-input").value);
+			$("ip-problem").hidden = !problem || !$("ip-input").value;
+			$("ip-problem").textContent = problem || "";
+			$("ip-save").disabled = !!problem;
+		}
+		function ipOpen(on) {
+			$("ip-form").hidden = !on;
+			$("ip-result").hidden = true;
+			if (on) {
+				$("ip-input").value = meshIp || "";
+				ipCheck();
+				$("ip-input").focus();
+				$("ip-input").select();
+			}
+		}
+		$("ip-edit").addEventListener("click", () => ipOpen($("ip-form").hidden));
+		$("ip-cancel").addEventListener("click", () => ipOpen(false));
+		$("ip-input").addEventListener("input", ipCheck);
+		$("ip-input").addEventListener("keydown", (e) => { if (e.key === "Escape") ipOpen(false); });
+		$("ip-form").addEventListener("submit", async (e) => {
+			e.preventDefault();
+			const ip = $("ip-input").value.trim();
+			if (ipProblem(ip)) return;
+			$("ip-save").disabled = true;
+			const result = $("ip-result");
+			try {
+				const res = await fetch("/cgi-bin/mesh-ip", { method: "POST", body: new URLSearchParams({ ip }) });
+				const d = await res.json();
+				result.hidden = false;
+				result.className = "result " + (d.ok ? "ok" : "bad");
+				if (!d.ok) {
+					result.textContent = "Not changed: " + (d.error || "unknown error");
+					$("ip-save").disabled = false;
+					return;
+				}
+				$("ip-input").blur();           // the phone's keyboard down
+				ipOpen(false);                  // done: the form goes, a note under the card says so
+				$("ip-save").disabled = false;
+				// opened over the old mesh address: that one goes away, follow the node
+				const oldHost = meshIp ? meshIp.split("/")[0] : null;
+				const newHost = ip.split("/")[0];
+				if (location.hostname === oldHost) {
+					note("ip-note", `Changing to ${ip}: opening the page at ${newHost}…`);
+					setTimeout(() => { location.href = `${location.protocol}//${newHost}${location.pathname}`; }, 4000);
+				} else {
+					note("ip-note", `Changing to ${ip}…`);
+				}
+			} catch (err) {
+				result.hidden = false;
+				result.className = "result bad";
+				result.textContent = "Not changed: node not responding.";
+				$("ip-save").disabled = false;
+			}
+		});
+
+		// ---- radio: channel (the whole mesh) and TX power limit (this node), cgi-bin/radio -----------
+		let radio = null;           // mesh-radio get
+		async function loadRadio() {
+			try {
+				const res = await fetch("/cgi-bin/radio", { cache: "no-store" });
+				const r = await res.json();
+				if (r.ok) radio = r;
+			} catch (e) { /* the status poll shows the node is gone */ }
+			return radio;
+		}
+		function showResult(id, ok, text) {
+			const el = $(id);
+			el.hidden = false;
+			el.className = "result " + (ok ? "ok" : "bad");
+			el.textContent = text;
+		}
+		// A short note under a card after a change went through (the form is closed by then)
+		const noteTimers = {};
+		function note(id, text) {
+			const el = $(id);
+			el.textContent = text;
+			el.className = "result ok card-note";
+			el.hidden = false;
+			clearTimeout(noteTimers[id]);
+			noteTimers[id] = setTimeout(() => { el.hidden = true; }, 8000);
+		}
+		function closeRadioForms() {
+			$("chan-form").hidden = true;
+			$("txp-form").hidden = true;
+		}
+		async function openRadioForm(which) {
+			const form = $(`${which}-form`);
+			const open = form.hidden;
+			closeRadioForms();
+			if (!open) return;
+			$(`${which}-result`).hidden = true;
+			const r = await loadRadio();
+			if (!r) return;
+			if (which === "chan") {
+				const mhz = (c) => (c === 14 ? 2484 : c < 14 ? 2407 + 5 * c : 5000 + 5 * c);
+				const opts = (list) => list.map((c) =>
+					`<option value="${c}"${c === r.channel ? " selected" : ""}>${c} (${mhz(c)} MHz)</option>`).join("");
+				const g24 = r.channels.filter((c) => c <= 14), g5 = r.channels.filter((c) => c > 14);
+				$("chan-select").innerHTML = (g24.length ? `<optgroup label="2.4 GHz">${opts(g24)}</optgroup>` : "") +
+					(g5.length ? `<optgroup label="5 GHz: more free channels, shorter range through trees and walls">${opts(g5)}</optgroup>` : "");
+			} else {
+				const cap = r.txpower_cap_dbm;
+				const opts = [`<option value="off"${cap == null ? " selected" : ""}>No limit (${r.txpower_max_dbm} dBm)</option>`];
+				for (let v = r.txpower_max_dbm; v >= 1; --v)
+					opts.push(`<option value="${v}"${cap === v ? " selected" : ""}>${v} dBm</option>`);
+				$("txp-select").innerHTML = opts.join("");
+			}
+			form.hidden = false;
+			$(`${which}-select`).focus();
+		}
+		$("chan-edit").addEventListener("click", () => openRadioForm("chan"));
+		$("txp-edit").addEventListener("click", () => openRadioForm("txp"));
+		$("chan-cancel").addEventListener("click", closeRadioForms);
+		$("txp-cancel").addEventListener("click", closeRadioForms);
+		for (const id of ["chan-select", "txp-select"])
+			$(id).addEventListener("keydown", (e) => { if (e.key === "Escape") closeRadioForms(); });
+
+		$("chan-form").addEventListener("submit", async (e) => {
+			e.preventDefault();
+			const channel = $("chan-select").value;
+			const scope = $("chan-all").checked ? "all" : "this";
+			$("chan-save").disabled = true;
+			try {
+				const res = await fetch("/cgi-bin/radio", { method: "POST", body: new URLSearchParams({ action: "channel", channel, scope }) });
+				const d = await res.json();
+				if (!d.ok) showResult("chan-result", false, "Not switched: " + (d.error || "unknown error"));
+				else {
+					closeRadioForms();
+					note("radio-note", scope === "all"
+						? `The mesh moves to channel ${channel} in ${d.switch_in_s} s: ${d.nodes_told} other node(s) told` +
+							(d.nodes_missed ? `, ${d.nodes_missed} did not answer (they stay on the old channel)` : "") + "."
+						: `This node moves to channel ${channel} in ${d.switch_in_s} s.`);
+				}
+			} catch (err) {
+				showResult("chan-result", false, "Not switched: node not responding.");
+			}
+			$("chan-save").disabled = false;
+		});
+
+		$("txp-form").addEventListener("submit", async (e) => {
+			e.preventDefault();
+			const txpower = $("txp-select").value;
+			$("txp-save").disabled = true;
+			try {
+				const res = await fetch("/cgi-bin/radio", { method: "POST", body: new URLSearchParams({ action: "txpower", txpower }) });
+				const d = await res.json();
+				if (d.ok) {
+					closeRadioForms();
+					note("radio-note", txpower === "off" ? "No TX power limit." : `TX power limited to ${txpower} dBm.`);
+					await loadRadio();
+				} else showResult("txp-result", false, "Not saved: " + (d.error || "unknown error"));
+			} catch (err) {
+				showResult("txp-result", false, "Not saved: node not responding.");
+			}
+			$("txp-save").disabled = false;
+		});
+		loadRadio();
+
+		// ---- Wi-Fi spectrum: a waterfall of sweeps (cgi-bin/scan) ---------------------------------
+		// The chip has no spectral scan: a sweep is a Wi-Fi scan of every allowed channel. A
+		// channel's level is the strongest signal heard there; on 2.4 GHz a 20 MHz wide network also
+		// covers the neighbouring channels (5 MHz apart), weaker by its overlap with them.
+		const SPEC = { keep: 25, rows: 25, rowPx: 8, minDbm: -95, maxDbm: -30, left: 70 };
+		// iw prints SSID bytes outside ASCII as \xNN: back to UTF-8 text ("Вадюха")
+		const utf8 = new TextDecoder("utf-8");
+		const ssidText = (s) => !s ? "(hidden)" : !s.includes("\\x") ? s
+			: utf8.decode(Uint8Array.from(s.replace(/\\x([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16))), (ch) => ch.charCodeAt(0)));
+		let sweeps = [];            // oldest first
+		let specRun = false;
+		let specHover = null;       // {canvas, x, y}
+		const mhz = (c) => (c === 14 ? 2484 : c < 14 ? 2407 + 5 * c : 5000 + 5 * c);
+
+		function specChannels() {
+			const all = radio ? radio.channels : [];
+			const band = $("spec-band").value;
+			return all.filter((c) => band === "all" || (band === "24" ? c <= 14 : c > 14));
+		}
+
+		// {dbm, nets[]} per channel for one sweep; our own mesh cell (signal 0) is not a signal
+		function levels(sweep, channels) {
+			return channels.map((c) => {
+				const f = mhz(c);
+				let dbm = null;
+				const nets = [];
+				for (const b of sweep.bss) {
+					if (b.signal == null || (b.ibss && b.signal === 0)) continue;
+					const d = Math.abs(b.freq - f);
+					if (d === 0) nets.push(b);
+					if (d >= 20) continue;
+					const v = b.signal + 10 * Math.log10((20 - d) / 20);
+					if (dbm == null || v > dbm) dbm = v;
+				}
+				nets.sort((a, b) => b.signal - a.signal);
+				return { c, dbm, nets };
+			});
+		}
+
+		// dark blue -> teal -> yellow -> red
+		const STOPS = [[11, 29, 81], [31, 95, 168], [43, 179, 163], [242, 193, 78], [226, 56, 47]];
+		function color(dbm) {
+			const t = Math.max(0, Math.min(1, (dbm - SPEC.minDbm) / (SPEC.maxDbm - SPEC.minDbm))) * (STOPS.length - 1);
+			const i = Math.min(Math.floor(t), STOPS.length - 2), k = t - i;
+			const [a, b] = [STOPS[i], STOPS[i + 1]];
+			return `rgb(${a.map((v, j) => Math.round(v + (b[j] - v) * k)).join(",")})`;
+		}
+
+		function fitCanvas(cv, cssH) {
+			const w = cv.clientWidth, r = window.devicePixelRatio || 1;
+			cv.style.height = cssH + "px";
+			if (cv.width !== Math.round(w * r) || cv.height !== Math.round(cssH * r)) {
+				cv.width = Math.round(w * r);
+				cv.height = Math.round(cssH * r);
+			}
+			const g = cv.getContext("2d");
+			g.setTransform(r, 0, 0, r, 0, 0);
+			return [g, w, cssH];
+		}
+
+		function drawSpectrum() {
+			const channels = specChannels();
+			const css = getComputedStyle(document.body);
+			const fg = css.getPropertyValue("--muted").trim(), line = css.getPropertyValue("--line").trim();
+			const text = css.getPropertyValue("--text").trim(), accent = css.getPropertyValue("--accent").trim();
+			const meshCh = radio ? radio.channel : null;
+			$("spec-empty").hidden = sweeps.length > 0;
+
+			// the latest sweep as bars
+			const [g, W, H] = fitCanvas($("spec-bars"), 150);
+			g.clearRect(0, 0, W, H);
+			const n = channels.length, col = n ? (W - SPEC.left) / n : 0, top = 8, bottom = H - 22;
+			const y = (dbm) => bottom - (bottom - top) * (dbm - (SPEC.minDbm - 5)) / (SPEC.maxDbm - SPEC.minDbm + 5);
+			g.font = "11px system-ui, sans-serif";
+			g.textAlign = "right";
+			g.textBaseline = "middle";
+			for (let d = -90; d <= -30; d += 20) {
+				g.strokeStyle = line;
+				g.beginPath(); g.moveTo(SPEC.left, y(d)); g.lineTo(W, y(d)); g.stroke();
+				g.fillStyle = fg;
+				g.fillText(`${d} dBm`, SPEC.left - 6, y(d));
+			}
+			const last = sweeps.length ? levels(sweeps[sweeps.length - 1], channels) : [];
+			last.forEach((l, i) => {
+				// scanned, nothing heard: a faint stub, so the channel does not look unscanned
+				if (l.dbm == null) {
+					g.fillStyle = line;
+					g.fillRect(SPEC.left + i * col + 1, bottom - 3, Math.max(col - 2, 1), 3);
+					return;
+				}
+				g.fillStyle = color(l.dbm);
+				g.fillRect(SPEC.left + i * col + 1, y(l.dbm), Math.max(col - 2, 1), bottom - y(l.dbm));
+			});
+			// channel numbers (every other one when they do not fit), the mesh channel marked
+			g.textAlign = "center";
+			g.textBaseline = "top";
+			const every = col >= 18 ? 1 : col >= 9 ? 2 : 4;
+			channels.forEach((c, i) => {
+				const x = SPEC.left + (i + 0.5) * col;
+				if (c === meshCh) {
+					g.strokeStyle = accent;
+					g.lineWidth = 2;
+					g.strokeRect(SPEC.left + i * col + 1, top, Math.max(col - 2, 1), bottom - top);
+					g.lineWidth = 1;
+				}
+				if (i % every === 0 || c === meshCh) {
+					g.fillStyle = c === meshCh ? accent : text;
+					g.fillText(String(c), x, bottom + 5);
+				}
+			});
+
+			// the waterfall: newest sweep on top
+			const rows = Math.min(sweeps.length, SPEC.rows);      // the newest SPEC.rows sweeps
+			const [w, WW, WH] = fitCanvas($("spec-fall"), Math.max(rows * SPEC.rowPx, 14) + 2);
+			w.clearRect(0, 0, WW, WH);
+			w.font = "11px system-ui, sans-serif";
+			w.textAlign = "right";
+			w.textBaseline = "top";
+			for (let r = 0; r < rows; ++r) {
+				const s = sweeps[sweeps.length - 1 - r];
+				levels(s, channels).forEach((l, i) => {
+					// scanned, nothing heard: the grid colour instead of blank
+					w.fillStyle = l.dbm == null ? line : color(l.dbm);
+					w.fillRect(SPEC.left + i * col, r * SPEC.rowPx, Math.ceil(col), SPEC.rowPx);
+				});
+				if (r % 10 === 0) {
+					w.fillStyle = fg;
+					w.fillText(new Date(s.t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }),
+						SPEC.left - 6, r * SPEC.rowPx);
+				}
+			}
+			const mi = channels.indexOf(meshCh);
+			if (mi >= 0 && rows) {
+				w.strokeStyle = accent;
+				w.lineWidth = 2;
+				w.strokeRect(SPEC.left + mi * col + 1, 0, Math.max(col - 2, 1), rows * SPEC.rowPx);
+			}
+			showSpecTip();
+		}
+
+		// the networks on the channel under the pointer (in that row's sweep, on the waterfall)
+		function showSpecTip() {
+			const tip = $("spec-tip");
+			if (!specHover || !sweeps.length) { tip.hidden = true; return; }
+			const { canvas, x, y } = specHover;
+			const channels = specChannels();
+			const col = (canvas.clientWidth - SPEC.left) / channels.length;
+			const i = Math.floor((x - SPEC.left) / col);
+			let row = canvas.id === "spec-fall" ? Math.floor(y / SPEC.rowPx) : 0;
+			if (i < 0 || i >= channels.length || row >= sweeps.length) { tip.hidden = true; return; }
+			const s = sweeps[sweeps.length - 1 - row];
+			const l = levels(s, channels)[i];
+			const nets = l.nets.slice(0, 6).map((b) => `<div>${esc(ssidText(b.ssid))} · ${Math.round(b.signal)} dBm</div>`).join("");
+			tip.innerHTML = `<b>Channel ${l.c}</b> (${mhz(l.c)} MHz) · ${new Date(s.t * 1000).toLocaleTimeString()}` +
+				(l.c === (radio && radio.channel) ? " · mesh" : "") +
+				(nets || `<div class="muted">${l.dbm == null ? "nothing heard" : "only neighbouring channels"}</div>`) +
+				(l.nets.length > 6 ? `<div class="muted">+${l.nets.length - 6} more</div>` : "");
+			tip.hidden = false;
+			const box = $("spec-box").getBoundingClientRect(), cr = canvas.getBoundingClientRect();
+			tip.style.left = Math.min(cr.left - box.left + x + 12, box.width - tip.offsetWidth - 4) + "px";
+			tip.style.top = (cr.top - box.top + y + 12) + "px";
+		}
+		for (const id of ["spec-bars", "spec-fall"]) {
+			$(id).addEventListener("mousemove", (e) => {
+				const r = e.currentTarget.getBoundingClientRect();
+				specHover = { canvas: e.currentTarget, x: e.clientX - r.left, y: e.clientY - r.top };
+				showSpecTip();
+			});
+			$(id).addEventListener("mouseleave", () => { specHover = null; showSpecTip(); });
+		}
+
+		function specStatus(text, bad = false) {
+			$("spec-status").textContent = text;
+			$("spec-status").className = "small " + (bad ? "warn" : "muted");
+		}
+
+		async function sweepOnce() {
+			specStatus("Scanning…");
+			try {
+				const res = await fetch("/cgi-bin/scan", { method: "POST" });
+				const d = await res.json();
+				if (!d.ok) return specStatus(d.error || "scan failed", true);
+				sweeps.push(d.sweep);
+				if (sweeps.length > SPEC.keep) sweeps.shift();
+				specStatus(`Last sweep ${new Date(d.sweep.t * 1000).toLocaleTimeString()} · ${(d.sweep.ms / 1000).toFixed(1)} s · ` +
+					`${d.sweep.bss.filter((b) => !(b.ibss && b.signal === 0)).length} networks`);
+				drawSpectrum();
+			} catch (e) {
+				specStatus("node not responding", true);
+			}
+		}
+
+		async function specLoop() {
+			while (specRun) {
+				await sweepOnce();
+				const wait = Number($("spec-every").value) * 1000;
+				for (let t = 0; specRun && t < Math.max(wait, 1000); t += 250)
+					await new Promise((r) => setTimeout(r, 250));
+			}
+		}
+		$("spec-run").addEventListener("click", () => {
+			specRun = !specRun;
+			$("spec-run").textContent = specRun ? "Stop" : "Start";
+			$("spec-run").classList.toggle("running", specRun);
+			if (specRun) specLoop();
+			else specStatus(sweeps.length ? "Stopped" : "");
+		});
+		$("spec-band").addEventListener("change", drawSpectrum);
+		window.addEventListener("resize", drawSpectrum);
+
+		// the sweeps this node kept (another viewer's too): the waterfall is not empty on opening
+		(async () => {
+			await loadRadio();
+			try {
+				const res = await fetch("/cgi-bin/scan", { cache: "no-store" });
+				const d = await res.json();
+				if (d.ok) sweeps = d.sweeps.slice(-SPEC.keep);
+			} catch (e) { /* none kept */ }
+			drawSpectrum();
+		})();
+
+		startPolling((d) => {
+			const m = d.mesh;
+			$("title").textContent = m.ip ? `ERL Node ${m.ip.split("/")[0]}` : "ERL Node";
+			$("ip").textContent = m.ip || "none";
+			meshIp = m.ip || null;
+			$("nodes").textContent = d.originators.filter((o) => !isLost(o)).length + 1;
+			$("neigh").textContent = d.neighbours.filter((n) => !isLost(n)).length;
+			$("uptime").textContent = fmtUptime(d.uptime);
+			$("if").textContent = m.if || "none";
+			$("mode").textContent = m.mode || "–";
+			$("ssid").textContent = m.ssid || "–";
+			$("chan").textContent = m.channel ? `${m.channel} (${m.freq} MHz)` : "–";
+			// the channel as the radio has it now (it changes a few seconds after a switch): the
+			// spectrum marks it
+			if (radio && m.channel && radio.channel !== m.channel) {
+				radio.channel = m.channel;
+				radio.freq = m.freq;
+				drawSpectrum();
+			}
+			// the driver reports its own maximum; the limit that applies is mesh-radio's
+			const cap = radio && radio.txpower_cap_dbm;
+			// without a limit the driver reports the country's maximum (e.g. 36 dBm), not what it sends
+			$("txp").textContent = cap ? `${cap} dBm (limited)` : radio ? "no limit" : "–";
+			$("gw").textContent = m.gw_mode || "–";
+		});
+	</script>
+</body>
+</html>

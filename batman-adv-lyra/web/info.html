@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>ERL Info</title>
+	<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+	<header>
+		<h1><span id="dot" class="dot"></span> ERL Info<span id="power" class="power" hidden></span></h1>
+		<nav>
+			<a href="/">Node</a>
+			<a href="/mesh.html">Mesh</a>
+			<a href="/peers.html">Peers</a>
+			<a href="/chat.html">Chat</a>
+			<a href="/erl.html">ERL</a>
+			<a href="/info.html" class="active">Info</a>
+			<a href="/exp.html">Test</a>
+		</nav>
+	</header>
+
+	<main>
+		<section class="card">
+			<h2>ERL firmware</h2>
+			<dl>
+				<dt>Version</dt><dd id="fw-version">–</dd>
+				<dt>Build</dt><dd id="fw-build">–</dd>
+				<dt>Built</dt><dd id="fw-built">–</dd>
+				<dt>ERL address</dt><dd id="fw-address" class="mono">–</dd>
+				<dt>Link</dt><dd id="fw-link">–</dd>
+				<dt>Position</dt><dd id="fw-position">–</dd>
+				<dt>Satellites</dt><dd id="fw-gps">–</dd>
+				<dt>Compass</dt><dd id="fw-compass">–</dd>
+			</dl>
+		</section>
+
+		<section class="card">
+			<h2>Firmware features</h2>
+			<div id="features"><p class="empty">Loading…</p></div>
+		</section>
+
+		<section class="card">
+			<h2>Battery monitor (ina226d)</h2>
+			<dl>
+				<dt>Service</dt><dd id="ina-service">–</dd>
+				<dt>Status</dt><dd id="ina-status">–</dd>
+				<dt>Sensor</dt><dd id="ina-sensor" class="mono">–</dd>
+				<dt>Shunt</dt><dd id="ina-shunt">–</dd>
+				<dt>Sampling</dt><dd id="ina-sampling">–</dd>
+				<dt>Reading</dt><dd id="ina-reading">–</dd>
+				<dt>Runtime</dt><dd id="ina-runtime">–</dd>
+				<dt>Updated</dt><dd id="ina-updated">–</dd>
+			</dl>
+		</section>
+
+		<section class="card">
+			<h2>App</h2>
+			<dl id="app">
+				<dt>App</dt><dd>not running in the ERL Node app (opened in a browser)</dd>
+			</dl>
+		</section>
+
+		<section class="card">
+			<h2>System</h2>
+			<dl>
+				<dt>Kernel</dt><dd id="kernel" class="mono">–</dd>
+				<dt>Uptime</dt><dd id="uptime">–</dd>
+				<dt>Load</dt><dd id="load">–</dd>
+				<dt>Memory free</dt><dd id="mem">–</dd>
+			</dl>
+		</section>
+	</main>
+
+	<footer id="updated">Connecting…</footer>
+
+	<script src="/app.js"></script>
+	<script>
+		// Features a firmware can be built with (merl.h MERL_FEATURE_*), shown whether this
+		// unit has them or not. Ids the page does not know come from a newer firmware.
+		const FEATURES = {
+			0: { name: "GPS", desc: "Internal GPS receiver: the unit's own position, shared with its peers" },
+			1: { name: "Compass", desc: "QMC5883 magnetometer: the unit's heading, in the header and on the peers map" },
+		};
+
+		const LINK = { up: "up", down: "down (no answers)", unknown: "connecting…", "no-tty": "no UART" };
+
+		function setText(id, text) {
+			$(id).textContent = text;
+		}
+
+		function renderFirmware(s) {
+			const fw = s.firmware;
+			const linkUp = s.link === "up";
+			setText("fw-link", LINK[s.link] || s.link);
+			$("fw-link").className = linkUp ? "good" : "warn";
+			setText("fw-address", s.network ? s.network.address : "–");
+			const hasCompass = s.features && s.features.supported && s.features.list.some((f) => f.id === 1);
+			const c = s.compass;
+			setText("fw-compass", c ? `${Math.round(c.heading)}° ${c.cardinal} ` +
+					(c.source === "phone" ? "(from the phone: not in this build)" : `(raw x ${c.x}, y ${c.y}, z ${c.z})`)
+				: hasCompass ? "no reading yet" : "not in this build");
+			const p = s.position;
+			const hasGps = s.features && s.features.supported && s.features.list.some((f) => f.id === 0);
+			setText("fw-position", p ? `${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)} ` +
+					(p.source === "phone" ? `(from the phone${hasGps ? ": no GPS fix yet" : ""}, ±${p.accuracy_m} m, ${fmtUptime(p.age_s)} ago)` : p.manual ? "(set manually)" : "(GPS)")
+				: s.phone && s.phone.gps ? phoneNoPosition(s.phone.gps_state, hasGps)
+				: s.features && s.features.supported && !hasGps ? "not in this build" : "no fix yet");
+
+			renderGps(s, hasGps);
+
+			if (fw && fw.supported) {
+				setText("fw-version", `v${fw.version}`);
+				setText("fw-build", `#${fw.build}`);
+				setText("fw-built", fw.built || `${fw.build_date} ${fw.build_time}`);
+			} else {
+				const why = fw ? "older firmware, no version info" : linkUp ? "reading…" : "unit not connected";
+				setText("fw-version", why);
+				setText("fw-build", "–");
+				setText("fw-built", "–");
+			}
+		}
+
+		// The phone should stand in for the unit's GPS but sent no position: the app says why
+		const PHONE_GPS = {
+			"no-permission": "the ERL Node app is not allowed the phone's location (Android settings → Apps → ERL Node → Location)",
+			"location-off": "Location is switched off on the phone",
+			waiting: "the phone has no position yet (no satellite fix, no Wi-Fi / cell location)",
+		};
+		function phoneNoPosition(state, hasGps) {
+			const why = PHONE_GPS[state] || (state === "ok" ? "sending…"
+				: "the ERL Node app is not sending it (not open, or the phone sensors option is off)");
+			return `${hasGps ? "no GPS fix; " : ""}from the phone: ${why}`;
+		}
+
+		// GPS receiver (MERL 0x3004): satellites used in the fix / seen, fix type, HDOP
+		const GPS_FIX = { none: "no fix", gps: "GPS fix", dgps: "DGPS fix" };
+		function renderGps(s, hasGps) {
+			const g = s.gps;
+			let text, good = false;
+			if (!g) text = s.features && s.features.supported && !hasGps ? "not in this build" : s.link === "up" ? "reading…" : "–";
+			else if (!g.supported) text = "needs newer firmware (GPS status, MERL 0x3004)";
+			else {
+				good = g.fix !== "none";
+				const phone = g.source === "phone";
+				// the phone's receiver: no satellites in the fix means a Wi-Fi / cell position
+				const fix = phone && !good ? "no satellite fix (Wi-Fi / cell position)" : GPS_FIX[g.fix] || g.fix;
+				text = `${g.satellites_used} used / ${g.satellites_in_view} in view · ${fix}` +
+					(g.hdop != null ? ` · HDOP ${g.hdop.toFixed(1)}` : "") + (phone ? " · from the phone" : "");
+			}
+			setText("fw-gps", text);
+			$("fw-gps").className = g && g.supported ? (good ? "good" : "warn") : "";
+		}
+
+		function renderFeatures(s) {
+			const f = s.features;
+			if (!f || !f.supported) {
+				const why = f ? "older firmware, no feature list" : s.link === "up" ? "reading…" : "unit not connected";
+				$("features").innerHTML = `<p class="empty">${esc(why)}</p>`;
+				return;
+			}
+			const present = new Set(f.list.map((x) => x.id));
+			const known = Object.entries(FEATURES).map(([id, info]) => {
+				const on = present.has(Number(id));
+				return `<div class="peer">
+					<div class="name">${esc(info.name)}</div>
+					<span class="badge${on ? " direct" : ""}">${on ? "in this build" : "not built in"}</span>
+					<div class="meta">${esc(info.desc)}</div>
+				</div>`;
+			});
+			const unknown = f.list.filter((x) => !(x.id in FEATURES)).map((x) => `<div class="peer">
+					<div class="name">${esc(x.name || `Feature 0x${x.id.toString(16).padStart(2, "0")}`)}</div>
+					<span class="badge direct">in this build</span>
+					<div class="meta">Not known to this page (newer firmware)</div>
+				</div>`);
+			$("features").innerHTML = known.concat(unknown).join("");
+		}
+
+		// The Android app passes its own version in (window.ErlApp, MainActivity)
+		function renderApp() {
+			if (!window.ErlApp) return;
+			try {
+				const a = JSON.parse(window.ErlApp.info());
+				$("app").innerHTML = `
+					<dt>App</dt><dd>${esc(a.name)}</dd>
+					<dt>Version</dt><dd>v${esc(a.version)}</dd>
+					<dt>Build</dt><dd>#${esc(String(a.build))}</dd>
+					<dt>Built</dt><dd>${esc(a.built)}</dd>
+					<dt>Android</dt><dd>${esc(a.android)}</dd>
+					<dt>Phone sensors</dt><dd>
+						<label class="switch-row"><input type="checkbox" id="phone-sensors"${window.ErlApp.phoneSensors?.() ? " checked" : ""}>
+						Use this phone's GPS and compass when the unit has none</label>
+						<div class="muted small">For a feature the unit's firmware is built without, and GPS also while the unit has no fix; sent on to the unit, so its peers see it too. While the app is open.</div>
+					</dd>`;
+				const box = $("phone-sensors");
+				if (window.ErlApp.setPhoneSensors) box.addEventListener("change", () => window.ErlApp.setPhoneSensors(box.checked));
+				else box.disabled = true;           // an older app
+			} catch (e) {
+				// an app without info(): leave the browser note
+			}
+		}
+
+		async function pollMerl() {
+			try {
+				const res = await fetch("/cgi-bin/merl", { cache: "no-store" });
+				const d = await res.json();
+				if (d.ok) {
+					renderFirmware(d.state);
+					renderFeatures(d.state);
+				} else {
+					setText("fw-version", d.error || "merld is not running");
+					$("features").innerHTML = `<p class="empty">–</p>`;
+				}
+			} catch (e) {
+				// node unreachable: the header dot shows it
+			}
+			setTimeout(pollMerl, POLL_MS);
+		}
+
+		// ina226d: the INA226 battery monitor on I2C1 (cgi-bin/power adds the service state and
+		// the board's clock, so the age of the last reading is measured on one clock)
+		// Time left: the remaining charge (capacity x charge %) at the average current, a minute's
+		// exponential average kept by ina226d, so a radio burst does not swing the estimate
+		function renderRuntime(p) {
+			const el = $("ina-runtime");
+			const basis = `(INA226_CAPACITY_MAH = ${p.capacity_mah}mAh)`;
+			const pct = p.ok ? batteryPercent(p.bus_v, p.cells ?? 2) : null;
+			const avg = p.avg_current_ma ?? p.current_ma;
+			let text;
+			if (!p.ok || !p.capacity_mah) text = "–";
+			else if (pct == null) text = "unknown: needs the battery voltage (VBUS)";
+			else if (avg < 5) text = "not discharging (charging or idle)";
+			else {
+				const hours = (p.capacity_mah * pct / 100) / avg;
+				text = `≈ ${fmtUptime(hours * 3600)} left at ${Math.round(avg)} mA (${pct}%)`;
+			}
+			el.innerHTML = `${esc(text)}<div class="muted small">${esc(basis)}</div>`;
+		}
+
+		async function pollIna() {
+			try {
+				const res = await fetch("/cgi-bin/power", { cache: "no-store" });
+				const p = await res.json();
+				const active = p.service === "active";
+				setText("ina-service", p.service || "–");
+				$("ina-service").className = active ? "good" : "warn";
+
+				const age = p.updated && p.now ? p.now - p.updated : null;
+				const stale = age != null && p.interval_ms && age * 1000 > 5 * p.interval_ms + 2000;
+				// current through the shunt but ~0 V on VBUS: the chip measures VBUS against GND, and
+				// on most breakouts VBUS is a pin of its own (wire it to IN-), or GND is not shared
+				const noVbus = p.ok && Math.abs(p.bus_v) < 0.05 && Math.abs(p.shunt_mv) > 0.1;
+				setText("ina-status", !p.ok ? p.error || "no data"
+					: stale ? "reading is old: the daemon stopped updating"
+					: noVbus ? "current only, bus voltage 0 V: VBUS pin not wired (connect it to IN−) or battery − not on GND"
+					: "measuring");
+				$("ina-status").className = p.ok && !stale && !noVbus ? "good" : "warn";
+
+				// ina226d searches 0x40..0x4F unless INA226_ADDR names an address that answers
+				// const how = !p.address_config || p.address === "none" ? ""
+				//	: p.address_config === "auto" ? " (found automatically)"
+				//	: p.address_config !== p.address ? ` (not at the configured ${p.address_config}: found here)` : "";
+				setText("ina-sensor", !p.bus ? "–" : p.address === "none" ? `no INA226 on ${p.bus} (searched 0x40–0x4F)`
+					: `INA226 at ${p.bus}, ${p.address}`);
+				setText("ina-shunt", p.shunt_ohm != null ? `${p.shunt_ohm} Ω, full scale ${p.max_current_a} A` : "–");
+				setText("ina-sampling", p.average_samples
+					? `average of ${p.average_samples} sample${p.average_samples > 1 ? "s" : ""}, every ${p.interval_ms} ms` : "–");
+				if (p.ok) {
+					const [v, i, w] = fmtPower(p);
+					setText("ina-reading", `${v} · ${i} · ${w} · shunt ${p.shunt_mv.toFixed(2)} mV`);
+				} else {
+					setText("ina-reading", "–");
+				}
+				renderRuntime(p);
+				setText("ina-updated", age == null ? "–" : age <= 1 ? "just now" : `${fmtUptime(age)} ago`);
+			} catch (e) {
+				// node unreachable: the header dot shows it
+			}
+			setTimeout(pollIna, POLL_MS);
+		}
+
+		renderApp();
+		pollMerl();
+		pollIna();
+		startPolling((d) => {
+			setText("kernel", d.kernel || "–");
+			setText("uptime", fmtUptime(d.uptime));
+			setText("load", d.load);
+			setText("mem", `${Math.round(d.mem_avail_kb / 1024)} / ${Math.round(d.mem_total_kb / 1024)} MB`);
+		});
+	</script>
+</body>
+</html>

@@ -1,0 +1,38 @@
+PROJECT_NAME := "emergencyRadioLink"
+PROJECT_GENERATOR := "ninja"
+PATH_BUILD := "build"
+PROJECT_PRESET := "Debug"
+PATH_PROJECT_BINARY :=  PROJECT_NAME + ".bin"
+PATH_CDC_DEVICE_PORT := "/dev/ttyACM0"
+CDC_BAUDRATE := "115200"
+
+alias f := flash
+alias b := build
+alias r := reboot
+alias m := monitor
+
+# Force flash (no need in bootsel mode)
+[no-cd]
+flash preset=PROJECT_PRESET:
+    @picotool load -f {{PATH_BUILD}}/{{preset}}/{{PATH_PROJECT_BINARY}}
+
+[no-cd]
+build preset=PROJECT_PRESET:
+    cd {{PATH_BUILD}}/{{preset}} && cmake ../.. && {{PROJECT_GENERATOR}}
+
+[no-cd]
+reboot:
+    @picotool reboot
+
+[no-cd]
+monitor:
+    @tio -b {{CDC_BAUDRATE}} {{PATH_CDC_DEVICE_PORT}}
+
+[no-cd]
+bfm: build flash monitor
+
+[no-cd]
+bf: build flash
+
+[no-cd]
+bfr: build flash reboot

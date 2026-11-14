@@ -1,0 +1,13 @@
+# Out-of-tree build of in-tree batman-adv + libcrc32c for the Luckfox Lyra kernel
+export CONFIG_BATMAN_ADV=m
+export CONFIG_BATMAN_ADV_BATMAN_V=y
+export CONFIG_BATMAN_ADV_BLA=y
+export CONFIG_BATMAN_ADV_DAT=y
+export CONFIG_BATMAN_ADV_MCAST=y
+
+subdir-ccflags-y += -DCONFIG_BATMAN_ADV_BATMAN_V=1 -DCONFIG_BATMAN_ADV_BLA=1 \
+		    -DCONFIG_BATMAN_ADV_DAT=1 -DCONFIG_BATMAN_ADV_MCAST=1 \
+		    -DCONFIG_BATMAN_ADV_MODULE=1 -DCONFIG_LIBCRC32C_MODULE=1
+
+obj-m += libcrc32c.o
+obj-m += batman-adv/

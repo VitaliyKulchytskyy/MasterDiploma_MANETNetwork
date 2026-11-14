@@ -1,0 +1,66 @@
+#!/bin/sh
+# The mesh radio for the Node page (mesh-radio on this node).
+#   GET                                               -> mesh-radio get
+#   POST action=txpower&txpower=<1..20|off>           -> this node's TX power cap
+#   POST action=channel&channel=<n>&scope=this|all[&delay=<s>]
+#        scope=all: every mesh node this node knows an IP of is told to switch too, all after the
+#        same delay, so the mesh moves together (a node left on the old channel is cut off)
+MESH_RADIO=/usr/local/sbin/mesh-radio
+DELAY=6         # seconds: the answer and the other nodes' requests get out on the old channel
+
+echo "Content-Type: application/json"
+echo "Cache-Control: no-store"
+echo ""
+
+fail() {
+	printf '{"ok":false,"error":"%s"}\n' "$1"
+	exit 0
+}
+
+[ -x "$MESH_RADIO" ] || fail "mesh-radio is not installed"
+if [ "$REQUEST_METHOD" != "POST" ]; then
+	"$MESH_RADIO" get
+	exit 0
+fi
+[ "${CONTENT_LENGTH:-0}" -gt 0 ] 2>/dev/null && [ "$CONTENT_LENGTH" -le 128 ] || fail "bad request"
+body=$(head -c "$CONTENT_LENGTH")
+field() {
+	echo "$body" | tr '&' '\n' | sed -n "s/^$1=//p" | head -n1
+}
+
+case "$(field action)" in
+txpower)
+	value=$(field txpower)
+	echo "$value" | grep -Eqx 'off|[0-9]{1,2}' || fail "TX power must be 1..20 dBm or off"
+	why=$("$MESH_RADIO" txpower "$value" 2>&1) || fail "$why"
+	printf '{"ok":true,"txpower":"%s"}\n' "$value"
+	;;
+channel)
+	ch=$(field channel)
+	scope=$(field scope)
+	delay=$(field delay)
+	echo "$delay" | grep -Eqx '[0-9]{1,2}' || delay=$DELAY
+	why=$("$MESH_RADIO" check "$ch" 2>&1) || fail "$why"
+	told=0
+	missed=0
+	if [ "$scope" = all ]; then
+		# the other nodes' mesh IPs, from this node's status (batman originators -> ARP)
+		ips=$(QUERY_STRING= "$(dirname "$0")/status" 2>/dev/null | sed '1,/^\r*$/d' |
+			grep -o '"ip":"[0-9.]*"' | cut -d'"' -f4 | sort -u)
+		for ip in $ips; do
+			if wget -q -t 1 -T 3 -O - --post-data "action=channel&channel=$ch&scope=this&delay=$delay" \
+				"http://$ip/cgi-bin/radio" 2>/dev/null | grep -q '"ok":true'; then
+				told=$((told + 1))
+			else
+				missed=$((missed + 1))
+			fi
+		done
+	fi
+	# after the answer: the page may be open over the mesh, on the old channel
+	setsid sh -c "sleep $delay; $MESH_RADIO channel $ch" >/dev/null 2>&1 < /dev/null &
+	printf '{"ok":true,"channel":%s,"switch_in_s":%s,"nodes_told":%s,"nodes_missed":%s}\n' "$ch" "$delay" "$told" "$missed"
+	;;
+*)
+	fail "unknown action"
+	;;
+esac

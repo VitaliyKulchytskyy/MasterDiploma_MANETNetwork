@@ -1,0 +1,14 @@
+[Unit]
+Description=Battery monitor (INA226 on I2C)
+
+[Service]
+# INA226_I2C, INA226_ADDR, INA226_SHUNT_OHM, ...: see ina226d.default
+EnvironmentFile=-/etc/default/ina226d
+ExecStart=/usr/local/sbin/ina226d
+# /run/ina226/power.json for the web UI
+RuntimeDirectory=ina226
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

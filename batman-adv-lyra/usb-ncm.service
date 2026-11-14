@@ -1,0 +1,13 @@
+[Unit]
+Description=USB Ethernet function (ECM/NCM) for the user's phone
+# The Rockchip gadget (adb + rndis) is created by /etc/rc.local -> S50usbdevice
+After=rc-local.service NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/usb-ncm up
+ExecStop=/usr/local/sbin/usb-ncm down
+
+[Install]
+WantedBy=multi-user.target

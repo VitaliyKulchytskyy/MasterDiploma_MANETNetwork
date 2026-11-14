@@ -1,0 +1,72 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "default",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CONFIG_UART_MAIN_HW": "uart0",
+                "CONFIG_UART_MAIN_BAUDRATE": "115200",
+                "CONFIG_UART_MAIN_TX": "0",
+                "CONFIG_UART_MAIN_RX": "1",
+            
+                "CONFIG_UART_GPS_HW": "uart1",
+                "CONFIG_UART_GPS_BAUDRATE": "115200",
+                "CONFIG_UART_GPS_TX": "8",
+                "CONFIG_UART_GPS_RX": "9",
+                "CONFIG_DEBUG_GPS": "OFF",
+
+                "CONFIG_I2C_COMPAS_SDA": "14",
+                "CONFIG_I2C_COMPAS_SCL": "15",
+                "CONFIG_I2C_COMPAS_HW": "i2c1",
+
+                "CONFIG_LORA_SPI_HW": "spi0",
+                "CONFIG_LORA_NSS": "5",
+                "CONFIG_LORA_MOSI": "3",
+                "CONFIG_LORA_MISO": "4",
+                "CONFIG_LORA_SCK": "2",
+                "CONFIG_LORA_RESET": "7",
+                "CONFIG_LORA_DIO0": "6",
+                "CONFIG_LORA_DIO1": "RADIOLIB_NC",
+
+                "CONFIG_ERL_NETWORK_ADDRESS": "0xCF01",
+                "CONFIG_ERL_NETWORK_SUBNET": "0xFFE0",
+
+                "CONFIG_WS2812_PIN": "16",
+
+                "CONFIG_INT_ALERT_PIN": "10",
+                "CONFIG_ALERT_DURATION_MS": "60000",
+
+                "CONFIG_DEVICE_MAJOR_VERSION": "1",
+                "CONFIG_DEVICE_MINOR_VERSION": "0",
+                "CONFIG_DEVICE_FEATURES": ""
+            }
+        },
+        {
+            "name": "Debug",
+            "inherits": "default",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "Release",
+            "inherits": "default",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "Debug",
+            "configurePreset": "Debug"
+        },
+        {
+            "name": "Release",
+            "configurePreset": "Release"
+        }
+    ]
+}

@@ -1,0 +1,13 @@
+[Unit]
+Description=Mesh gateway client: default route + DNS via the best mesh gateway
+After=mesh.service
+PartOf=mesh.service
+
+[Service]
+# -f foreground, retry every 10 s while no gateway answers; the hook ignores the offered IP
+ExecStart=/usr/bin/busybox udhcpc -f -i bat0 -s /usr/local/sbin/mesh-gwclient -t 3 -T 3 -A 10
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

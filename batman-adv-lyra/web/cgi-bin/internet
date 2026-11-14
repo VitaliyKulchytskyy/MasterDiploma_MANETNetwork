@@ -1,0 +1,13 @@
+#!/bin/sh
+# Internet status from erl-inet (/run/erl/internet.json)
+STATE=/run/erl/internet.json
+
+echo "Content-Type: application/json"
+echo "Cache-Control: no-store"
+echo ""
+
+if [ -r "$STATE" ]; then
+	cat "$STATE"
+else
+	echo '{"role":null,"online":null,"error":"erl-inet is not running"}'
+fi

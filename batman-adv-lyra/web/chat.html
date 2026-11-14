@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>ERL Chat</title>
+	<link rel="stylesheet" href="/style.css">
+</head>
+<body class="chat-page">
+	<header>
+		<h1><span id="dot" class="dot"></span> ERL Chat<span id="power" class="power" hidden></span></h1>
+		<nav>
+			<a href="/">Node</a>
+			<a href="/mesh.html">Mesh</a>
+			<a href="/peers.html">Peers</a>
+			<a href="/chat.html" class="active">Chat</a>
+			<a href="/erl.html">ERL</a>
+			<a href="/info.html">Info</a>
+			<a href="/exp.html">Test</a>
+		</nav>
+	</header>
+
+	<main class="chat-main">
+		<p id="link-note" class="notice" hidden></p>
+		<div class="chat-filter">
+			<label for="show">Show</label>
+			<select id="show"><option value="all">All messages</option><option value="broadcast">Broadcast</option></select>
+			<label class="switch-row small"><input id="show-tests" type="checkbox"> <span>Test messages</span></label>
+		</div>
+		<section id="log" class="chat-log" aria-live="polite">
+			<p class="empty">Loading…</p>
+		</section>
+	</main>
+
+	<!-- one tap, straight to everyone -->
+	<div class="quick">
+		<button id="quick-sos" type="button" class="quick-sos">Send SOS</button>
+		<button id="quick-pos" type="button" class="quick-pos" disabled>Send my coordinates</button>
+	</div>
+
+	<!-- Send SOS asks first: an SOS alerts every unit in the network -->
+	<div id="sos-confirm" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="sos-title">
+		<div class="modal-box">
+			<h2 id="sos-title">Approve emergency status</h2>
+			<p>It will send an SOS message to everyone in the network:</p>
+			<p id="sos-preview" class="modal-preview"></p>
+			<div class="modal-buttons">
+				<button id="sos-no" type="button" class="modal-no">No</button>
+				<button id="sos-yes" type="button" class="modal-yes">Yes, send SOS</button>
+			</div>
+		</div>
+	</div>
+
+	<form id="compose" class="composer" autocomplete="off">
+		<select id="to" aria-label="Recipient"><option value="broadcast">Everyone</option></select>
+		<input id="text" maxlength="126" placeholder="Message" aria-label="Message" enterkeyhint="send">
+		<button id="send" type="submit">Send</button>
+		<span id="bytes" class="bytes">0/126</span>
+	</form>
+
+	<script src="/app.js"></script>
+	<script>
+		// Chat over ERL (LoRa) through the emergency unit: merld keeps the history in SQLite.
+		const MAX_BYTES = 126;              // ERL payload 128 minus the \r\n
+		const enc = new TextEncoder();
+
+		let own = null;                     // our ERL address, e.g. "0xC701"
+		let peers = [];                     // addresses from the peer table
+		let messages = [];
+		let lastRendered = "";
+
+		// the date is on the day separator above
+		const fmtTime = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+		const isTest = (t) => /^EXP(-ACK)? \S+ \d+/.test(t || "");
+
+		// the conversation partner of a message
+		const partner = (m) => m.broadcast ? "broadcast" : (m.dir === "out" ? m.to : m.from);
+
+		function statusLabel(m) {
+			if (m.dir === "in") return "";
+			if (m.status === "sent") return "sent";
+			if (m.status === "pending") return "sending…";
+			return m.status;                 // "failed: ..."
+		}
+
+		// "Today", "Yesterday", "Monday, 28 September" (and the year when it is not this one)
+		function dayLabel(t) {
+			const d = new Date(t * 1000), now = new Date();
+			const start = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+			const days = Math.round((start(now) - start(d)) / 86400000);
+			if (days === 0) return "Today";
+			if (days === 1) return "Yesterday";
+			return d.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long",
+				...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}) });
+		}
+
+		function render() {
+			const show = $("show").value;
+			// link-test messages (Test page, erl-exp) are hidden unless asked for
+			const tests = $("show-tests").checked;
+			const list = messages.filter((m) => (show === "all" || partner(m) === show) && (tests || !isTest(m.text)));
+			// the day too: "Today" becomes "Yesterday" at midnight
+			const key = show + tests + new Date().toDateString() + JSON.stringify(list);
+			if (key === lastRendered) return;
+			lastRendered = key;
+
+			const log = $("log");
+			const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+			if (!list.length) {
+				log.innerHTML = `<p class="empty">${messages.length ? "No messages here." : "No messages yet. Say hi to everyone below."}</p>`;
+				return;
+			}
+			let day = null;
+			log.innerHTML = list.map((m) => {
+				// a separator with the date whenever the day changes (board clock, local date)
+				const d = new Date(m.time * 1000).toDateString();
+				const sep = d !== day ? `<div class="day-sep"><span>${esc(dayLabel(m.time))}</span></div>` : "";
+				day = d;
+				const mine = m.dir === "out";
+				// a direct message for another unit (firmware that does not filter by receiver)
+				const other = !mine && !m.broadcast && own && m.to !== own;
+				const who = mine ? (m.broadcast ? "You to everyone" : `You to ${esc(m.to)}`)
+					: `${esc(m.from)}${m.broadcast ? " to everyone" : other ? ` to ${esc(m.to)}` : ""}`;
+				const st = statusLabel(m);
+				const failed = mine && m.status.startsWith("failed");
+				return `${sep}<div class="msg ${mine ? "out" : "in"}${m.broadcast ? " bcast" : ""}${failed ? " failed" : ""}">
+					<div class="meta">${who}</div>
+					<div class="bubble">${esc(m.text)}</div>
+					<div class="meta"><time title="${esc(new Date(m.time * 1000).toLocaleString())}">${fmtTime(m.time)}</time>${st ? ` · <span class="st">${esc(st)}</span>` : ""}</div>
+				</div>`;
+			}).join("");
+			if (nearBottom) log.scrollTop = log.scrollHeight;
+		}
+
+		function refreshSelects() {
+			const known = new Set(peers);
+			for (const m of messages) if (!m.broadcast) known.add(partner(m));
+			known.delete(own);
+			const addrs = [...known].filter(Boolean).sort();
+
+			const fill = (sel, first) => {
+				const cur = sel.value;
+				sel.innerHTML = first + addrs.map((a) => `<option value="${esc(a)}">${esc(a)}</option>`).join("");
+				if ([...sel.options].some((o) => o.value === cur)) sel.value = cur;
+			};
+			fill($("show"), `<option value="all">All messages</option><option value="broadcast">Broadcast</option>`);
+			fill($("to"), `<option value="broadcast">Everyone</option>`);
+		}
+
+		async function loadChat() {
+			try {
+				const res = await fetch("/cgi-bin/chat?limit=100", { cache: "no-store" });
+				const data = await res.json();
+				setOnline(true);
+				if (data.ok) {
+					messages = data.messages;
+					render();
+				}
+			} catch (e) {
+				setOnline(false);
+			}
+		}
+
+		async function loadState() {
+			try {
+				const res = await fetch("/cgi-bin/merl", { cache: "no-store" });
+				const data = await res.json();
+				const s = data.state || {};
+				unit = s;
+				updateQuick();
+				own = s.network ? s.network.address : null;
+				peers = (s.peers || []).map((p) => p.address);
+				const note = $("link-note");
+				const problem = !data.ok ? (data.error || "merld unavailable")
+					: s.link !== "up" ? `Emergency unit ${s.link === "no-tty" ? "not connected" : "not answering"}: messages cannot be sent right now.` : "";
+				note.hidden = !problem;
+				note.textContent = problem;
+				refreshSelects();
+			} catch (e) { /* the chat poll reports the connection */ }
+		}
+
+		async function poll() {
+			await Promise.all([loadChat(), loadState()]);
+			setTimeout(poll, POLL_MS);
+		}
+
+		function updateBytes() {
+			const n = enc.encode($("text").value).length;
+			$("bytes").textContent = `${n}/${MAX_BYTES}`;
+			$("bytes").classList.toggle("over", n > MAX_BYTES);
+			$("send").disabled = n === 0 || n > MAX_BYTES;
+		}
+
+		$("text").addEventListener("input", updateBytes);
+		$("show-tests").addEventListener("change", () => { lastRendered = ""; render(); });
+		$("show").addEventListener("change", () => {
+			lastRendered = "";
+			render();
+			const show = $("show").value;
+			if (show !== "all") $("to").value = show;   // reply where you are looking
+			$("log").scrollTop = $("log").scrollHeight;
+		});
+
+		// Send one message; true when merld stored it (sent, or failed with its status in the log)
+		async function sendMessage(to, text) {
+			let stored = false;
+			try {
+				const body = new URLSearchParams({ to, text });
+				const res = await fetch("/cgi-bin/chat", { method: "POST", body });
+				const data = await res.json();
+				stored = !!(data.ok || data.message_id);
+				if (!data.ok) {
+					$("link-note").hidden = false;
+					$("link-note").textContent = "Not sent: " + (data.error || data.answer);
+				}
+			} catch (e) {
+				$("link-note").hidden = false;
+				$("link-note").textContent = "Not sent: node not responding.";
+			}
+			await loadChat();
+			$("log").scrollTop = $("log").scrollHeight;
+			return stored;
+		}
+
+		$("compose").addEventListener("submit", async (event) => {
+			event.preventDefault();
+			const text = $("text").value.trim();
+			if (!text || enc.encode(text).length > MAX_BYTES) return;
+			$("send").disabled = true;
+			if (await sendMessage($("to").value, text)) $("text").value = "";
+			updateBytes();
+			$("text").focus();
+		});
+
+		// ---- quick messages: our unit's position (GPS / manual) and compass, from merld --------
+
+		let unit = {};                      // the last merld state
+
+		const fmtCoords = (p) => `${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}`;
+		const fmtHeading = (c) => `heading ${Math.round(c.heading)}° ${c.cardinal}`;
+
+		// what we know about where we are, e.g. "50.45010, 30.52340, heading 137° SE"
+		function whereText() {
+			const parts = [];
+			if (unit.position) parts.push(fmtCoords(unit.position));
+			if (unit.compass) parts.push(fmtHeading(unit.compass));
+			return parts.join(", ");
+		}
+
+		// Starts with "SOS": the firmware raises its alert, receivers get the SOS notification
+		// and the sender turns red on their peers map
+		function sosText() {
+			const where = whereText();
+			return where ? `SOS! Need help at ${where}` : "SOS! Need help";
+		}
+
+		function positionText() {
+			if (!unit.position && !unit.compass) return null;
+			return `My position: ${unit.position ? fmtCoords(unit.position) : "no GPS fix"}` +
+				(unit.compass ? `, ${fmtHeading(unit.compass)}` : "");
+		}
+
+		function updateQuick() {
+			const pos = positionText();
+			$("quick-pos").disabled = !pos;
+			$("quick-pos").title = pos || "No GPS position or compass reading from the emergency unit yet";
+			$("quick-sos").title = sosText();
+		}
+
+		async function quickSend(button, text) {
+			const label = button.textContent;
+			button.disabled = true;
+			button.textContent = "Sending…";
+			const ok = await sendMessage("broadcast", text);
+			button.textContent = ok ? "Sent ✓" : label;
+			setTimeout(() => {
+				button.textContent = label;
+				button.disabled = false;
+				updateQuick();
+			}, ok ? 1500 : 0);
+		}
+
+		// Send SOS: confirm first, showing the exact message
+		function closeSosConfirm() {
+			$("sos-confirm").hidden = true;
+			$("quick-sos").focus();
+		}
+
+		$("quick-sos").addEventListener("click", () => {
+			$("sos-preview").textContent = sosText();
+			$("sos-confirm").hidden = false;
+			$("sos-no").focus();                // the safe choice has the focus
+		});
+		$("sos-yes").addEventListener("click", () => {
+			const text = $("sos-preview").textContent;
+			closeSosConfirm();
+			quickSend($("quick-sos"), text);
+		});
+		$("sos-no").addEventListener("click", closeSosConfirm);
+		// a tap outside the box or Escape is a No
+		$("sos-confirm").addEventListener("click", (e) => { if (e.target === $("sos-confirm")) closeSosConfirm(); });
+		document.addEventListener("keydown", (e) => {
+			if (e.key === "Escape" && !$("sos-confirm").hidden) closeSosConfirm();
+		});
+		$("quick-pos").addEventListener("click", () => {
+			const text = positionText();
+			if (text) quickSend($("quick-pos"), text);
+		});
+
+		updateBytes();
+		poll();
+	</script>
+</body>
+</html>

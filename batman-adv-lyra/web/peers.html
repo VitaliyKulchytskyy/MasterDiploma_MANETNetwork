@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>ERL Peers</title>
+	<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+	<header>
+		<h1><span id="dot" class="dot"></span> ERL Peers<span id="power" class="power" hidden></span></h1>
+		<nav>
+			<a href="/">Node</a>
+			<a href="/mesh.html">Mesh</a>
+			<a href="/peers.html" class="active">Peers</a>
+			<a href="/chat.html">Chat</a>
+			<a href="/erl.html">ERL</a>
+			<a href="/info.html">Info</a>
+			<a href="/exp.html">Test</a>
+		</nav>
+	</header>
+
+	<main>
+		<p id="link-note" class="notice" hidden></p>
+
+		<!-- an SOS just received: up for at least ALARM_S, whatever else happens -->
+		<section id="alarm" class="alarm" hidden role="alert" aria-live="assertive">
+			<div id="alarm-list"></div>
+			<div class="alarm-buttons">
+				<button id="alarm-sound" type="button" class="alarm-btn"></button>
+			</div>
+		</section>
+
+		<section class="card">
+			<h2>Peers <span id="count"></span></h2>
+			<div class="table-wrap">
+				<table class="peers">
+					<thead>
+						<tr><th>Address</th><th>RSSI</th><th>Distance</th><th>Uptime</th><th>Position</th></tr>
+					</thead>
+					<tbody id="rows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+				</table>
+			</div>
+		</section>
+
+		<section id="map-card" class="card map-card">
+			<div class="card-head">
+				<h2>Map <span id="map-mode" class="badge"></span></h2>
+				<button id="map-expand" type="button" class="expand-btn" aria-label="Open the map full screen">
+					<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg><span>Full screen</span>
+				</button>
+			</div>
+			<div id="map" class="map"></div>
+			<svg id="plot" class="plot" viewBox="0 0 600 400" role="img" aria-label="Peer positions" hidden></svg>
+			<p id="map-note" class="empty small"></p>
+		</section>
+
+		<section class="card">
+			<h2>Link graph</h2>
+			<svg id="graph" class="graph" viewBox="0 0 600 440" role="img" aria-label="Links to peers with RSSI"></svg>
+			<p class="legend small">
+				<span><span class="swatch good"></span> strong (&gt; −90 dBm)</span>
+				<span><span class="swatch mid"></span> fair (−90…−110)</span>
+				<span><span class="swatch low"></span> weak (&lt; −110)</span>
+				<span><span class="swatch none"></span> no RSSI</span>
+			</p>
+		</section>
+
+		<section class="card">
+			<h2>Alarm log <span class="muted small">(last 5 SOS)</span></h2>
+			<div id="alarm-log"><p class="empty">No SOS received.</p></div>
+		</section>
+	</main>
+
+	<footer id="updated">Connecting…</footer>
+
+	<script src="/app.js"></script>
+	<script>
+		// ---- data -----------------------------------------------------------------------------
+		// Peer table from the emergency unit via merld: the unit lists itself too, with rssi 0.
+
+		const R_EARTH = 6371000;
+		const rad = (d) => d * Math.PI / 180;
+
+		function distanceM(a, b) {
+			const dLat = rad(b.lat - a.lat), dLon = rad(b.lon - a.lon);
+			const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+			return 2 * R_EARTH * Math.asin(Math.sqrt(h));
+		}
+
+		// initial bearing of the straight (great-circle) line from a to b, degrees from north
+		function bearingDeg(a, b) {
+			const y = Math.sin(rad(b.lon - a.lon)) * Math.cos(rad(b.lat));
+			const x = Math.cos(rad(a.lat)) * Math.sin(rad(b.lat)) - Math.sin(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.cos(rad(b.lon - a.lon));
+			return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+		}
+		const cardinalOf = (deg) => ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(deg / 45) % 8];
+
+		const fmtDist = (m) => m == null ? "–" : m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(m < 10000 ? 2 : 1)} km`;
+		// the unit lists itself with rssi 0; a remote peer at 0 means no RSSI was recorded for it
+		const quality = (rssi) => rssi === 0 ? "none" : rssi > -90 ? "good" : rssi > -110 ? "mid" : "low";
+		const fmtRssi = (rssi) => rssi === 0 ? "no RSSI" : `${rssi} dBm`;
+		// Leaflet needs real colour values, not CSS variables
+		const cssColor = (q) => getComputedStyle(document.body)
+			.getPropertyValue({ good: "--ok", mid: "--warn", low: "--bad", none: "--muted", self: "--accent", sos: "--sos" }[q]).trim();
+
+		// ---- SOS: peers that sent a message starting with "SOS" (the firmware's rule) -----------
+
+		let sosFrom = {};                   // address -> {time, lat, lon} of its last SOS (board clock)
+		let sosLog = [];                    // the last SOS_LOG_SIZE SOS messages, newest first
+		const SOS_LOG_SIZE = 5;
+		// an SOS lasts a minute: the alarm, and the sender red in the table, on the map and on the
+		// diagram (the emergency unit's alert light and the INT_ALERT_PIN pulse last as long)
+		const SOS_S = 60;
+		const ALARM_S = SOS_S;
+		const SOS_SHOW_S = SOS_S;
+
+		// SOS senders and the mesh's compasses only add to the table: never wait long for them
+		const EXTRA_TIMEOUT_MS = 4000;
+
+		const isSos = (text) => /^\s*sos/i.test(text || "");
+		// "SOS! Need help at 50.45010, 30.52340, heading 52° NE" (the chat's Send SOS): the sender's
+		// position, for a peer the table has no position for (or no longer lists)
+		function sosWhere(text) {
+			const m = /(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/.exec(text || "");
+			if (!m) return null;
+			const lat = Number(m[1]), lon = Number(m[2]);
+			return Math.abs(lat) <= 90 && Math.abs(lon) <= 180 ? { lat, lon } : null;
+		}
+
+		async function loadSos() {
+			try {
+				const res = await fetch("/cgi-bin/chat?limit=200", { cache: "no-store", signal: AbortSignal.timeout(EXTRA_TIMEOUT_MS) });
+				const data = await res.json();
+				if (!data.ok) return;
+				const latest = {};
+				const log = [];
+				for (const m of data.messages) {
+					if (m.dir !== "in" || !isSos(m.text)) continue;
+					const where = sosWhere(m.text) || {};
+					log.push({ id: m.id, time: m.time, from: m.from, text: m.text, ...where });
+					const last = latest[m.from];
+					if (!last || m.time >= last.time) latest[m.from] = { time: m.time, ...where };
+				}
+				sosFrom = latest;
+				sosLog = log.sort((a, b) => b.time - a.time || b.id - a.id).slice(0, SOS_LOG_SIZE);
+			} catch (e) { /* keep the last known */ }
+		}
+
+		// ---- compass: our unit's own (merld), a peer's from the peer table (its ERL broadcast), or
+		// calibrated by its own node over the mesh (cgi-bin/mesh-compass) when there is one
+
+		let meshCompass = {};               // ERL address -> {heading, cardinal}
+
+		async function loadMeshCompass() {
+			try {
+				const res = await fetch("/cgi-bin/mesh-compass", { cache: "no-store", signal: AbortSignal.timeout(EXTRA_TIMEOUT_MS) });
+				const data = await res.json();
+				if (data.ok) meshCompass = Object.fromEntries(data.nodes.map((n) => [n.address, n]));
+			} catch (e) { /* keep the last known */ }
+		}
+
+		// An arrow from the node's centre outwards, pointing along its heading (north up)
+		const headingArrow = (h, r) => `<g transform="rotate(${h})"><path class="heading-arrow"
+			d="M0,${-r - 14} L5,${-r - 4} L1.5,${-r - 5} L1.5,${-r + 1} L-1.5,${-r + 1} L-1.5,${-r - 5} L-5,${-r - 4} Z"/></g>`;
+
+		function model(state) {
+			const own = state.network ? state.network.address : null;
+			const nodes = (state.peers || []).map((p) => ({
+				address: p.address,
+				rssi: p.rssi,
+				uptime: p.uptime,
+				lat: p.latitude,
+				lon: p.longitude,
+				compass: p.compass,         // the peer's own broadcast over ERL (raw, not calibrated)
+				self: p.address === own,
+			}));
+			let self = nodes.find((n) => n.self);
+			if (!self && own) {
+				self = { address: own, rssi: 0, self: true, lat: null, lon: null };
+				nodes.unshift(self);
+			}
+			// our own GPS/manual position wins over the table entry
+			if (self && state.position) {
+				self.lat = state.position.latitude;
+				self.lon = state.position.longitude;
+			}
+			const hasPos = (n) => n.lat != null && n.lon != null;
+			// compared on the board's clock (state.updated), the one the messages are stamped with
+			const now = state.updated || Date.now() / 1000;
+			// an SOS sender the peer table does not list (any more): still on the map, where it said
+			for (const [address, s] of Object.entries(sosFrom))
+				if (address !== own && now - s.time < SOS_SHOW_S && s.lat != null && !nodes.some((n) => n.address === address))
+					nodes.push({ address, rssi: 0, lat: null, lon: null, self: false, missing: true });
+			for (const n of nodes) {
+				const s = sosFrom[n.address];
+				n.sos = !n.self && s && now - s.time < SOS_SHOW_S ? s.time : null;
+				// no position of its own: the one in its SOS message
+				if (n.sos && !hasPos(n) && s.lat != null) {
+					n.lat = s.lat;
+					n.lon = s.lon;
+					n.posFromSos = true;
+				}
+				n.distance = !n.self && self && hasPos(n) && hasPos(self) ? distanceM(self, n) : null;
+				// ours: merld's calibrated reading; a peer's: the one its own node calibrated (over the
+				// mesh), else its raw broadcast from the peer table (over ERL)
+				const c = n.self ? state.compass || n.compass : meshCompass[n.address] || n.compass;
+				n.heading = c ? c.heading : null;
+				n.cardinal = c ? c.cardinal : null;
+			}
+			return { self, peers: nodes.filter((n) => !n.self), nodes, hasPos, now };
+		}
+
+		// ---- table ----------------------------------------------------------------------------
+
+		function renderTable(m) {
+			$("count").textContent = `(${m.peers.length})`;
+			if (!m.nodes.length) {
+				$("rows").innerHTML = `<tr><td colspan="5" class="empty">No peers heard yet.</td></tr>`;
+				return;
+			}
+			// an SOS sender that is not heard now (not in the peer table): last
+			const sorted = [m.self, ...m.peers.slice().sort((a, b) => (a.missing - b.missing) || (b.rssi - a.rssi))].filter(Boolean);
+			$("rows").innerHTML = sorted.map((n) => {
+				const q = quality(n.rssi);
+				const rssi = n.self ? `<span class="muted">this node</span>`
+					: n.missing ? `<span class="muted">not heard now</span>`
+					: `<span class="rssi ${q}">${fmtRssi(n.rssi)}</span>`;
+				const heading = n.heading != null ? ` · ${headingArrowIcon(n.heading)} ${Math.round(n.heading)}° ${esc(n.cardinal)}` : "";
+				const pos = (m.hasPos(n) ? `${n.lat.toFixed(5)}, ${n.lon.toFixed(5)}` : `<span class="muted">no fix</span>`) +
+					(n.posFromSos ? ` <span class="muted">(from its SOS)</span>` : "") + heading;
+				const sos = n.sos ? ` <span class="sos-badge" title="SOS received">SOS ${fmtClock(n.sos)}</span>` : "";
+				return `<tr${n.self ? ' class="self"' : n.sos ? ' class="sos"' : ""}>
+					<td class="mono">${esc(n.address)}${sos}</td><td>${rssi}</td><td>${fmtDist(n.distance)}</td>
+					<td>${n.uptime != null ? fmtUptime(n.uptime) : "–"}</td><td class="mono small">${pos}</td></tr>`;
+			}).join("");
+		}
+
+		const fmtClock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+		// ---- map: OpenStreetMap when the browser has internet, otherwise an offline plot -------
+
+		let online = null;          // null: still checking
+		let leaflet = null;         // { map, layer, fitted }
+
+		function loadScript(src) {
+			return new Promise((resolve, reject) => {
+				const s = document.createElement("script");
+				s.src = src; s.onload = resolve; s.onerror = reject;
+				document.head.appendChild(s);
+			});
+		}
+
+		function reachable(url, ms) {
+			return new Promise((resolve) => {
+				const img = new Image();
+				const timer = setTimeout(() => { img.src = ""; resolve(false); }, ms);
+				img.onload = () => { clearTimeout(timer); resolve(true); };
+				img.onerror = () => { clearTimeout(timer); resolve(false); };
+				img.src = url + "?" + Date.now();
+			});
+		}
+
+		async function detectInternet() {
+			if (!(await reachable("https://tile.openstreetmap.org/0/0/0.png", 4000))) return false;
+			try {
+				const css = document.createElement("link");
+				css.rel = "stylesheet";
+				css.href = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
+				document.head.appendChild(css);
+				await Promise.race([
+					loadScript("https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"),
+					new Promise((_, reject) => setTimeout(reject, 5000)),
+				]);
+				return typeof L !== "undefined";
+			} catch (e) {
+				return false;
+			}
+		}
+
+		// "⚠ SOS 12:34" with a pointer down to the peer (the Leaflet map)
+		function sosAlertHtml(n) {
+			const where = n.posFromSos ? " · position from its SOS" : n.missing ? " · not heard now" : "";
+			return `<div class="sos-alert" title="SOS from ${esc(n.address)} at ${fmtClock(n.sos)}${where}">
+				<span class="sos-alert-icon" aria-hidden="true">⚠</span>SOS ${fmtClock(n.sos)}
+				<span class="sos-alert-addr">${esc(n.address)}</span></div>`;
+		}
+
+		function renderLeaflet(m) {
+			if (!leaflet) {
+				const map = L.map("map", { zoomControl: true, attributionControl: true });
+				L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+					maxZoom: 19,
+					attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+				}).addTo(map);
+				leaflet = { map, layer: L.layerGroup().addTo(map), focusLayer: L.layerGroup().addTo(map), fitted: false };
+			}
+			const { map, layer } = leaflet;
+			layer.clearLayers();
+			const placed = m.nodes.filter(m.hasPos);
+			const self = m.self && m.hasPos(m.self) ? m.self : null;
+			for (const n of placed) {
+				if (self && !n.self && !n.missing) {
+					const q = quality(n.rssi);
+					L.polyline([[self.lat, self.lon], [n.lat, n.lon]], {
+						color: cssColor(q), weight: 3, opacity: 0.8, dashArray: "6 6",
+					}).addTo(layer);
+				}
+			}
+			// the distance in a pill at the middle of each link, above the lines and markers
+			for (const n of placed) {
+				if (!self || n.self || n.missing || n.distance == null) continue;
+				const q = quality(n.rssi);
+				L.marker([(self.lat + n.lat) / 2, (self.lon + n.lon) / 2], {
+					icon: L.divIcon({
+						className: "dist-icon", iconSize: [0, 0],
+						html: `<span class="dist-pill ${q}" title="${esc(n.address)} · ${esc(fmtRssi(n.rssi))}">${esc(fmtDist(n.distance))}</span>`,
+					}),
+					interactive: false, keyboard: false, zIndexOffset: 1000,
+				}).addTo(layer);
+			}
+			for (const n of placed.filter((p) => p.heading != null)) {
+				const r = n.sos ? 10 : n.self ? 9 : 7;
+				L.marker([n.lat, n.lon], {
+					icon: L.divIcon({
+						className: "heading-icon", iconSize: [64, 64], iconAnchor: [32, 32],
+						html: `<svg viewBox="-32 -32 64 64" width="64" height="64">${headingArrow(n.heading, r + 2)}</svg>`,
+					}),
+					interactive: false, keyboard: false,
+				}).addTo(layer);
+			}
+			for (const n of placed) {
+				L.circleMarker([n.lat, n.lon], {
+					radius: n.sos ? 10 : n.self ? 9 : 7, weight: n.sos ? 3 : 2, color: "#fff",
+					fillColor: cssColor(n.self ? "self" : n.sos ? "sos" : quality(n.rssi)),
+					fillOpacity: 1,
+					className: n.sos ? "sos-marker" : "",
+				}).bindTooltip(`${n.address}${n.self ? " (this node)" : n.missing ? " · not heard now" : ` · ${fmtRssi(n.rssi)}`}`,
+					{ direction: "top" })
+					.addTo(layer);
+			}
+			// the SOS alert right above the peer, over everything else on the map
+			for (const n of placed.filter((p) => p.sos)) {
+				L.marker([n.lat, n.lon], {
+					icon: L.divIcon({ className: "sos-icon", iconSize: [0, 0], html: sosAlertHtml(n) }),
+					interactive: false, keyboard: false, zIndexOffset: 2000,
+				}).addTo(layer);
+			}
+			if (placed.length && !leaflet.fitted) {
+				if (placed.length === 1) map.setView([placed[0].lat, placed[0].lon], 15);
+				else map.fitBounds(placed.map((n) => [n.lat, n.lon]), { padding: [30, 30] });
+				leaflet.fitted = true;
+			} else if (!placed.length) {
+				map.setView([0, 0], 1);
+			}
+			setTimeout(() => map.invalidateSize(), 0);
+		}
+
+		// Equirectangular plot, good enough for a few kilometres
+		function renderPlot(m) {
+			const svg = $("plot");
+			const W = 600, H = 400, PAD = 50;
+			const placed = m.nodes.filter(m.hasPos);
+			if (!placed.length) {
+				svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" class="plot-empty" text-anchor="middle">No GPS positions yet</text>`;
+				return;
+			}
+			// the "Show on map" target is part of the view too
+			const inView = focus ? placed.concat([{ lat: focus.lat, lon: focus.lon }]) : placed;
+			const lat0 = inView.reduce((s, n) => s + n.lat, 0) / inView.length;
+			const kx = Math.cos(rad(lat0));
+			const xs = inView.map((n) => n.lon * kx), ys = inView.map((n) => n.lat);
+			const minSpan = 0.003;                                  // ~300 m, so one node is not a point cloud
+			let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+			const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+			const spanX = Math.max(x1 - x0, minSpan), spanY = Math.max(y1 - y0, minSpan);
+			const scale = Math.min((W - 2 * PAD) / spanX, (H - 2 * PAD) / spanY);
+			const px = (n) => W / 2 + (n.lon * kx - cx) * scale;
+			const py = (n) => H / 2 - (n.lat - cy) * scale;
+
+			// scale bar: a round length about a quarter of the width
+			const mPerPx = 111320 / scale;
+			const target = mPerPx * W / 4;
+			const step = [1, 2, 5].flatMap((d) => [1, 10, 100, 1000, 10000].map((e) => d * e)).sort((a, b) => a - b)
+				.reduce((best, v) => (Math.abs(v - target) < Math.abs(best - target) ? v : best), 1);
+			const barPx = step / mPerPx;
+
+			let out = "";
+			const self = m.self && m.hasPos(m.self) ? m.self : null;
+			for (const n of placed) {
+				if (!self || n.self || n.missing) continue;
+				const q = quality(n.rssi);
+				out += `<line x1="${px(self)}" y1="${py(self)}" x2="${px(n)}" y2="${py(n)}" class="edge ${q}"/>`;
+			}
+			// the distance in a pill at the middle of each link (drawn after the lines)
+			const pills = [];
+			for (const n of placed) {
+				if (!self || n.self || n.missing || n.distance == null) continue;
+				// the plot is scaled down to the card's width: sized so it reads like the map's pills
+				const text = fmtDist(n.distance), w = text.length * 11 + 28;
+				const mx = (px(self) + px(n)) / 2, my = (py(self) + py(n)) / 2;
+				pills.push(`<g class="dist-pill-svg ${quality(n.rssi)}"><rect x="${mx - w / 2}" y="${my - 15}" width="${w}" height="30" rx="15"/>
+					<text x="${mx}" y="${my + 6}" text-anchor="middle">${esc(text)}</text></g>`);
+			}
+			for (const n of placed.filter((p) => p.heading != null))
+				out += `<g transform="translate(${px(n)},${py(n)})">${headingArrow(n.heading, (n.sos ? 10 : n.self ? 9 : 7) + 2)}</g>`;
+			for (const n of placed) {
+				const q = n.self ? "self" : n.sos ? "sos" : quality(n.rssi);
+				out += `<circle cx="${px(n)}" cy="${py(n)}" r="${n.sos ? 10 : n.self ? 9 : 7}" class="node ${q}"/>
+					<text x="${px(n) + 12}" y="${py(n) + 4}" class="node-label${n.sos ? " sos" : ""}">${n.sos ? "SOS " : ""}${esc(n.address)}${n.self ? "" : ` · ${fmtDist(n.distance)}`}</text>`;
+			}
+			out += pills.join("");
+			if (focus) {
+				const fx = px(focus), fy = py(focus);
+				out += `<g class="focus-svg"><circle cx="${fx}" cy="${fy}" r="14"/><circle cx="${fx}" cy="${fy}" r="14" class="late"/>
+					<path d="M${fx - 22},${fy} h10 M${fx + 12},${fy} h10 M${fx},${fy - 22} v10 M${fx},${fy + 12} v10"/></g>`;
+			}
+			// the SOS alert right above the peer: a red call-out, drawn last so nothing covers it
+			for (const n of placed.filter((p) => p.sos)) {
+				const text = `SOS ${fmtClock(n.sos)}`, w = text.length * 9 + 20, x = px(n), y = py(n) - 18;
+				out += `<g class="sos-callout"><path d="M${x - w / 2},${y - 30} h${w} v24 h${-w / 2 + 6} l-6,6 l-6,-6 h${-w / 2 + 6} z"/>
+					<text x="${x}" y="${y - 13}" text-anchor="middle">${esc(text)}</text></g>`;
+			}
+			out += `<g transform="translate(${PAD - 30},${H - 20})">
+				<line x1="0" y1="0" x2="${barPx}" y2="0" class="scale"/><line x1="0" y1="-5" x2="0" y2="5" class="scale"/>
+				<line x1="${barPx}" y1="-5" x2="${barPx}" y2="5" class="scale"/>
+				<text x="${barPx / 2}" y="-8" text-anchor="middle" class="node-label">${fmtDist(step)}</text></g>
+				<text x="${W - 14}" y="24" text-anchor="middle" class="node-label">N</text>
+				<path d="M ${W - 14} 30 l -5 12 l 5 -4 l 5 4 z" class="north"/>`;
+			svg.innerHTML = out;
+		}
+
+		// Full screen map: the card itself goes over the page; ✕, Escape or Back (the app's, or
+		// the phone's: a history entry) close it
+		let fullscreen = false;
+		function setFullscreen(on, fromHistory = false) {
+			if (on === fullscreen) return;
+			fullscreen = on;
+			$("map-card").classList.toggle("fullscreen", on);
+			document.body.classList.toggle("no-scroll", on);
+			const btn = $("map-expand");
+			btn.querySelector("span").textContent = on ? "Close" : "Full screen";
+			btn.querySelector("svg").innerHTML = on ? '<path d="M3 3l10 10M13 3L3 13"/>'
+				: '<path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/>';
+			btn.setAttribute("aria-label", on ? "Close the full screen map" : "Open the map full screen");
+			if (on) history.pushState({ mapFull: true }, "");
+			else if (!fromHistory && history.state?.mapFull) history.back();
+			// Leaflet measures its box: after the layout changes, and fit the nodes to it again
+			if (leaflet) setTimeout(() => {
+				leaflet.map.invalidateSize();
+				leaflet.fitted = false;
+				if (last) renderMap(last);
+			}, 0);
+		}
+		$("map-expand").addEventListener("click", () => setFullscreen(!fullscreen));
+		document.addEventListener("keydown", (e) => { if (e.key === "Escape") setFullscreen(false); });
+		window.addEventListener("popstate", () => setFullscreen(false, true));
+
+		function renderMap(m) {
+			const placed = m.nodes.filter(m.hasPos).length;
+			const missing = m.nodes.length - placed;
+			// an SOS sender with no position anywhere (no GPS fix, none in its message): say so plainly
+			const lost = m.nodes.filter((n) => n.sos && !m.hasPos(n));
+			const others = missing - lost.length;
+			$("map-note").innerHTML = lost.map((n) => `<span class="sos-note">⚠ SOS from ${esc(n.address)} at ${fmtClock(n.sos)}:
+				position unknown (no GPS fix, none in its message)</span>`).join("<br>") +
+				(others ? `${lost.length ? "<br>" : ""}${others} node(s) without GPS fix are not on the map.` : "");
+			if (online === null) {
+				$("map-mode").textContent = "checking internet…";
+				return;
+			}
+			$("map-mode").textContent = online ? "OpenStreetMap" : "offline";
+			$("map").hidden = !online;
+			$("plot").toggleAttribute("hidden", online);   // SVG elements have no .hidden property
+			if (online) renderLeaflet(m); else renderPlot(m);
+		}
+
+		// ---- link graph: this node in the middle, weaker peers further out -------------------
+
+		function renderGraph(m) {
+			const svg = $("graph");
+			const W = 600, H = 440, CX = W / 2, CY = H / 2;
+			if (!m.self && !m.peers.length) {
+				svg.innerHTML = `<text x="${CX}" y="${CY}" class="plot-empty" text-anchor="middle">No peers heard yet</text>`;
+				return;
+			}
+			const peers = m.peers.filter((n) => !n.missing).sort((a, b) => a.address.localeCompare(b.address));
+			// -40 dBm → 70 px, -125 → 190 px; unknown RSSI sits in the middle
+			const radius = (rssi) => 70 + (Math.min(-40, Math.max(-125, rssi === 0 ? -85 : rssi)) + 40) / -85 * 120;
+			let edges = "", nodes = "", labels = "";
+			peers.forEach((n, i) => {
+				const a = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(peers.length, 1);
+				const r = radius(n.rssi);
+				const x = CX + r * Math.cos(a), y = CY + r * Math.sin(a);
+				const q = quality(n.rssi);
+				const width = { good: 4, mid: 3, low: 2, none: 2 }[q];
+				edges += `<line x1="${CX}" y1="${CY}" x2="${x}" y2="${y}" class="edge ${q}" style="stroke-width:${width}"/>`;
+				const mx = (CX + x) / 2, my = (CY + y) / 2;
+				const text = fmtRssi(n.rssi), w = text.length * 7 + 10;
+				labels += `<rect x="${mx - w / 2}" y="${my - 9}" width="${w}" height="18" rx="9" class="edge-pill ${q}"/>
+					<text x="${mx}" y="${my + 4}" text-anchor="middle" class="edge-label ${q}">${text}</text>`;
+				nodes += `<circle cx="${x}" cy="${y}" r="16" class="node ${n.sos ? "sos" : q}"/>
+					<text x="${x}" y="${y + (y > CY ? 34 : -24)}" text-anchor="middle" class="node-label${n.sos ? " sos" : ""}">${n.sos ? "SOS " : ""}${esc(n.address)}</text>`;
+			});
+			nodes += `<circle cx="${CX}" cy="${CY}" r="22" class="node self"/>
+				<text x="${CX}" y="${CY + 4}" text-anchor="middle" class="node-center">${m.self ? esc(m.self.address).replace("0x", "") : "?"}</text>`;
+			svg.innerHTML = edges + nodes + labels;
+		}
+
+		// ---- alarm: every SOS younger than ALARM_S (board clock, so a reload does not cut it
+		// short), with sound; and the log of the last SOS messages -----------------------------
+
+		const fmtTime = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+		let soundOn = true;
+		try { soundOn = localStorage.getItem("erl-alarm-sound") !== "off"; } catch (e) { /* private mode */ }
+		let audio = null;           // AudioContext, made on the first user tap (browsers block sound before one)
+		let beepTimer = null;
+
+		function beep() {
+			if (!audio || !soundOn) return;
+			if (audio.state === "suspended") audio.resume();
+			const t0 = audio.currentTime;
+			for (let i = 0; i < 3; i++) {             // three short high tones
+				const osc = audio.createOscillator(), gain = audio.createGain();
+				osc.type = "square";
+				osc.frequency.value = 1760;
+				gain.gain.setValueAtTime(0.0001, t0 + i * 0.25);
+				gain.gain.exponentialRampToValueAtTime(0.25, t0 + i * 0.25 + 0.01);
+				gain.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.25 + 0.15);
+				osc.connect(gain).connect(audio.destination);
+				osc.start(t0 + i * 0.25);
+				osc.stop(t0 + i * 0.25 + 0.16);
+			}
+		}
+		function unlockAudio() {
+			if (audio) return;
+			try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { /* no Web Audio */ }
+		}
+		document.addEventListener("pointerdown", unlockAudio, { once: true });
+		document.addEventListener("keydown", unlockAudio, { once: true });
+
+		function renderSoundButton() {
+			$("alarm-sound").textContent = soundOn ? "🔊 Sound on" : "🔇 Sound off";
+		}
+		$("alarm-sound").addEventListener("click", () => {
+			unlockAudio();
+			soundOn = !soundOn;
+			try { localStorage.setItem("erl-alarm-sound", soundOn ? "on" : "off"); } catch (e) { /* private mode */ }
+			renderSoundButton();
+			if (soundOn) beep();
+		});
+		renderSoundButton();
+
+		// Centre the map on a position (the alarm's and the log's "Show on map") and mark it with a
+		// pulsing target for FOCUS_MS, so it is plain where on the map it is
+		const FOCUS_MS = 10000;
+		let focus = null;           // {lat, lon, until}: drawn by renderLeaflet / renderPlot
+		let focusTimer = null;
+		function showOnMap(lat, lon) {
+			focus = { lat, lon, until: Date.now() + FOCUS_MS };
+			clearTimeout(focusTimer);
+			focusTimer = setTimeout(() => {
+				focus = null;
+				if (leaflet) leaflet.focusLayer.clearLayers();
+				if (last) renderMap(last);
+			}, FOCUS_MS);
+			$("map-card").scrollIntoView({ behavior: "smooth", block: "center" });
+			if (leaflet && online) {
+				leaflet.map.setView([lat, lon], Math.max(leaflet.map.getZoom(), 16));
+				// a layer of its own: the node layer is redrawn every poll, the animation would restart
+				leaflet.focusLayer.clearLayers();
+				L.marker([lat, lon], {
+					icon: L.divIcon({ className: "focus-icon", iconSize: [0, 0],
+						html: '<div class="focus-ping"><span></span><span></span><i></i></div>' }),
+					interactive: false, keyboard: false, zIndexOffset: 3000,
+				}).addTo(leaflet.focusLayer);
+			}
+			if (last) renderMap(last);
+		}
+		function mapLink(e) {
+			return e.lat != null ? `<button type="button" class="link-btn" data-lat="${e.lat}" data-lon="${e.lon}">Show on map</button>` : "";
+		}
+		document.addEventListener("click", (e) => {
+			const b = e.target.closest(".link-btn[data-lat]");
+			if (b) showOnMap(Number(b.dataset.lat), Number(b.dataset.lon));
+		});
+
+		function renderAlarms(m) {
+			// positions: the SOS message's own, else the sender's on the map
+			const posOf = (e) => {
+				if (e.lat != null) return e;
+				const n = m.nodes.find((x) => x.address === e.from);
+				return n && m.hasPos(n) ? { lat: n.lat, lon: n.lon } : {};
+			};
+			// The way to the SOS for the one reading the alarm: the sender's own heading (in the
+			// chat's "..., heading 52° NE") says nothing to them, so it is replaced by how far to turn
+			// from where our unit faces (its compass) and how far to walk along a straight line
+			const way = (e) => {
+				const to = posOf(e), self = m.self;
+				if (to.lat == null) return "No position in the SOS: the direction is unknown.";
+				if (!self || !m.hasPos(self)) return "No position of our own (no GPS fix): the direction is unknown.";
+				const dist = distanceM(self, to), brg = bearingDeg(self, to);
+				if (dist < 10) return "You are there: less than 10 m away.";
+				const rest = `distance ~${fmtDist(dist)} (bearing ${Math.round(brg)}° ${cardinalOf(brg)})`;
+				if (self.heading == null) return `${headingArrowIcon(brg, 28)} No compass, ${rest}`;
+				const turn = ((brg - self.heading) % 360 + 540) % 360 - 180;   // -180..180, + is right
+				const a = Math.abs(Math.round(turn));
+				const how = a <= 10 ? "Straight ahead" : a >= 170 ? "Turn around" : `Turn ${a}° ${turn > 0 ? "right" : "left"}`;
+				return `${headingArrowIcon(turn, 28)} <b>${how}</b>, ${rest}`;
+			};
+			const withoutHeading = (text) => text.replace(/,?\s*heading\s+\d+(\.\d+)?°\s*[NSEW]{0,3}/i, "").replace(/\s+at\s*$/i, "");
+			const active = sosLog.filter((e) => m.now - e.time < ALARM_S);
+			$("alarm").hidden = !active.length;
+			$("alarm-list").innerHTML = active.map((e) => `<div class="alarm-item">
+				<div class="alarm-title">⚠ SOS from ${esc(e.from)}</div>
+				<div class="alarm-meta">${fmtTime(e.time)} · ${Math.max(0, Math.round(m.now - e.time))} s ago ${mapLink(posOf(e))}</div>
+				<div class="alarm-text">${esc(withoutHeading(e.text))}</div>
+				<div class="alarm-way">${way(e)}</div></div>`).join("");
+			// sound: every few seconds while an alarm is up
+			if (active.length && !beepTimer) {
+				beep();
+				beepTimer = setInterval(beep, 3000);
+			} else if (!active.length && beepTimer) {
+				clearInterval(beepTimer);
+				beepTimer = null;
+			}
+
+			$("alarm-log").innerHTML = sosLog.length ? `<ul class="alarm-log">${sosLog.map((e) => `<li${m.now - e.time < ALARM_S ? ' class="active"' : ""}>
+				<div><span class="mono">${esc(e.from)}</span> · ${fmtTime(e.time)}
+					<span class="muted small">${new Date(e.time * 1000).toLocaleDateString()}</span> ${mapLink(posOf(e))}</div>
+				<div class="small">${esc(e.text)}</div></li>`).join("")}</ul>` : `<p class="empty">No SOS received.</p>`;
+		}
+
+		// ---- polling --------------------------------------------------------------------------
+
+		let last = null;
+
+		async function load() {
+			try {
+				const res = await fetch("/cgi-bin/merl", { cache: "no-store" });
+				const data = await res.json();
+				setOnline(true);
+				const s = data.state || {};
+				const note = $("link-note");
+				const problem = !data.ok ? (data.error || "merld unavailable")
+					: s.link !== "up" ? `Emergency unit ${s.link === "no-tty" ? "not connected" : "not answering"}; showing the last known data.` : "";
+				note.hidden = !problem;
+				note.textContent = problem;
+				await Promise.all([loadSos(), loadMeshCompass()]);
+				last = model(s);
+				renderTable(last);
+				renderMap(last);
+				renderGraph(last);
+				renderAlarms(last);
+				$("updated").textContent = "Updated " + new Date().toLocaleTimeString();
+			} catch (e) {
+				setOnline(false);
+			}
+			setTimeout(load, POLL_MS);
+		}
+
+		detectInternet().then((ok) => {
+			online = ok;
+			if (last) renderMap(last);
+		});
+		load();
+	</script>
+</body>
+</html>

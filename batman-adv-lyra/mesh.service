@@ -1,0 +1,17 @@
+[Unit]
+Description=batman-adv mesh over IBSS (LyraMesh)
+# mesh-up hands the dongle over from NetworkManager/wpa_supplicant, so start after them
+After=NetworkManager.service wpa_supplicant.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Per-board settings: MESH_IP (required), MESH_GW (off|server|client)
+EnvironmentFile=/etc/default/mesh
+ExecStart=/usr/local/sbin/mesh-up ${MESH_IP} ${MESH_GW}
+ExecStop=/usr/local/sbin/mesh-down
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target

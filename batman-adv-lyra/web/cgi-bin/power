@@ -1,0 +1,18 @@
+#!/bin/sh
+# Battery readings from ina226d (INA226 on I2C1), plus for the Info page the daemon's service
+# state and the board's clock ("now": how old "updated" is, on the same clock)
+STATE=/run/ina226/power.json
+
+echo "Content-Type: application/json"
+echo "Cache-Control: no-store"
+echo ""
+
+service=$(systemctl is-active ina226d.service 2>/dev/null)
+extra="\"service\":\"${service:-unknown}\",\"now\":$(date +%s)"
+
+if [ -r "$STATE" ]; then
+	# one JSON object on one line: add the fields before its closing brace
+	sed "s/}[[:space:]]*\$/,$extra}/" "$STATE"
+else
+	echo "{\"ok\":false,\"error\":\"ina226d is not running\",$extra}"
+fi

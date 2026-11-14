@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ERL Node</string>
+    <string name="waiting_title">Connect the ERL device</string>
+    <string name="waiting_text">Plug the device into this phone\'s USB‑C port. The node page opens as soon as the USB link is up, even with mobile data or Wi‑Fi on.\n\nTo share mobile data with the node and its mesh, turn on Ethernet tethering: the page then opens over the tethering link.</string>
+    <string name="loading">Connecting to the node…</string>
+    <string name="unreachable">The USB link is up, but the node does not answer yet. Retrying…</string>
+    <string name="retry">Retry</string>
+    <string name="watch_title">Watching for ERL messages</string>
+    <string name="watch_text">Chat messages and SOS from the mesh show up as notifications.</string>
+    <string name="watch_stop">Stop</string>
+    <string name="channel_watch">Message watch (running)</string>
+    <string name="channel_chat">Chat messages</string>
+    <string name="channel_sos">SOS</string>
+    <string name="sos_from">SOS from %1$s</string>
+    <string name="message_broadcast">%1$s → everyone</string>
+    <string name="version_line">ERL Node v%1$d.%2$d · build #%3$d · %4$s</string>
+</resources>

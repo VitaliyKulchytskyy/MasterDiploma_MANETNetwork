@@ -1,0 +1,14 @@
+[Unit]
+Description=Internet from the phone's Ethernet tethering over the USB link
+Requires=usb-ncm.service
+After=usb-ncm.service
+# Follow usb-ncm restarts: switching ecm/ncm changes the interface
+PartOf=usb-ncm.service
+
+[Service]
+ExecStart=/usr/local/sbin/usb-uplink run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

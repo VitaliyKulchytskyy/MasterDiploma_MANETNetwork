@@ -1,0 +1,8 @@
+# Out-of-tree build of the CDC-NCM / CDC-ECM USB gadget functions
+# (not enabled in the Lyra kernel config; u_ether/libcomposite already are)
+ccflags-y += -I$(srctree)/drivers/usb/gadget -I$(srctree)/drivers/usb/gadget/function
+
+obj-m += usb_f_ncm.o
+usb_f_ncm-y := f_ncm.o
+obj-m += usb_f_ecm.o
+usb_f_ecm-y := f_ecm.o

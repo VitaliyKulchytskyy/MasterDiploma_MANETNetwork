@@ -1,0 +1,14 @@
+[Unit]
+Description=Mesh internet gateway (NAT from bat0 to the uplink)
+# rules follow the mesh: restarted with it
+After=mesh.service
+PartOf=mesh.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/mesh-gw up
+ExecStop=/usr/local/sbin/mesh-gw down
+
+[Install]
+WantedBy=multi-user.target

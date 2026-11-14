@@ -1,0 +1,64 @@
+#!/bin/sh
+# The user's phone GPS / compass, sent by the ERL Node app, for a unit built without them
+# (merld uses them only while the unit's firmware lacks the feature).
+#   POST action=position&lon=30.52340&lat=50.45010[&acc=12][&used=9&view=31][&age=40]
+#                                                             -> merlctl phone position
+#   POST action=gps&state=no-permission|location-off|waiting|ok -> merlctl phone gps
+#   POST action=compass&heading=137.5                         -> merlctl phone compass
+MERLCTL=/usr/local/sbin/merlctl
+
+echo "Content-Type: application/json"
+echo "Cache-Control: no-store"
+echo ""
+
+fail() {
+	printf '{"ok":false,"error":"%s"}\n' "$1"
+	exit 0
+}
+
+[ -x "$MERLCTL" ] || fail "merlctl is not installed"
+[ "$REQUEST_METHOD" = "POST" ] || fail "POST only"
+[ "${CONTENT_LENGTH:-0}" -gt 0 ] 2>/dev/null && [ "$CONTENT_LENGTH" -le 256 ] || fail "bad request"
+body=$(head -c "$CONTENT_LENGTH")
+
+field() {
+	echo "$body" | tr '&' '\n' | sed -n "s/^$1=//p" | head -n1
+}
+
+# only plain decimal numbers reach merlctl
+number() {
+	echo "$1" | grep -Eqx -- '-?[0-9]{1,3}(\.[0-9]{1,9})?'
+}
+
+case "$(field action)" in
+position)
+	lon=$(field lon)
+	lat=$(field lat)
+	acc=$(field acc)
+	number "$lon" && number "$lat" || fail "lon and lat must be decimal degrees"
+	number "${acc:-0}" || acc=0
+	# the phone's satellites: used in the fix / in view (whole numbers, -1: unknown), and
+	# how old the fix is in seconds
+	used=$(field used)
+	view=$(field view)
+	age=$(field age)
+	echo "$used" | grep -Eqx '[0-9]{1,3}' && echo "$view" | grep -Eqx '[0-9]{1,3}' || { used=-1; view=-1; }
+	echo "$age" | grep -Eqx '[0-9]{1,9}' || age=0
+	"$MERLCTL" phone position "$lon" "$lat" "${acc:-0}" "$used" "$view" "$age"
+	;;
+gps)
+	state=$(field state)
+	case "$state" in
+	no-permission | location-off | waiting | ok) "$MERLCTL" phone gps "$state" ;;
+	*) fail "unknown gps state" ;;
+	esac
+	;;
+compass)
+	heading=$(field heading)
+	number "$heading" || fail "heading must be decimal degrees"
+	"$MERLCTL" phone compass "$heading"
+	;;
+*)
+	fail "unknown action"
+	;;
+esac

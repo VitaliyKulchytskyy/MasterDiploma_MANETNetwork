@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>ERL Mesh</title>
+	<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+	<header>
+		<h1><span id="dot" class="dot"></span> ERL Mesh<span id="power" class="power" hidden></span></h1>
+		<nav>
+			<a href="/">Node</a>
+			<a href="/mesh.html" class="active">Mesh</a>
+			<a href="/peers.html">Peers</a>
+			<a href="/chat.html">Chat</a>
+			<a href="/erl.html">ERL</a>
+			<a href="/info.html">Info</a>
+			<a href="/exp.html">Test</a>
+		</nav>
+	</header>
+
+	<main>
+		<section class="card">
+			<h2>Nodes <span id="count"></span></h2>
+			<div id="peers"><p class="empty">Loading…</p></div>
+		</section>
+
+		<section class="card">
+			<h2>Internet gateways</h2>
+			<div id="gws"><p class="empty">Loading…</p></div>
+		</section>
+	</main>
+
+	<footer id="updated">Connecting…</footer>
+
+	<script src="/app.js"></script>
+	<script>
+		function peerHtml(p) {
+			const pct = tqPercent(p.tq);
+			const name = p.ip
+				? `<a href="http://${esc(p.ip)}/">${esc(p.ip)}</a>`
+				: esc(p.mac);
+			let hop = p.direct
+				? `<span class="badge direct">direct</span>`
+				: `<span class="badge">via ${esc(p.nexthop)}</span>`;
+			const lost = isLost(p);
+			if (lost) hop = `<span class="badge">lost</span>`;
+			return `<div class="peer${lost ? " lost" : ""}">
+				<div class="name">${name}</div>${hop}
+				<div class="bar"><span class="${tqClass(p.tq)}" style="width:${pct}%"></span></div>
+				<div class="meta">link ${pct}% · seen ${p.last_seen.toFixed(1)} s ago · ${esc(p.mac)}</div>
+			</div>`;
+		}
+
+		let selfGateway = false;
+		onInternet((i) => { selfGateway = i.role === "server" && i.announced; });
+
+		startPolling((d) => {
+			// reachable nodes first, lost ones below until batman-adv forgets them
+			const peers = d.originators.slice().sort((a, b) => isLost(a) - isLost(b) || b.tq - a.tq);
+			$("count").textContent = `(${peers.filter((p) => !isLost(p)).length})`;
+			$("peers").innerHTML = peers.length
+				? peers.map(peerHtml).join("")
+				: `<p class="empty">No other nodes in range.</p>`;
+			const lostMacs = new Set(peers.filter(isLost).map((p) => p.mac));
+			// batman-adv does not list the node itself among the gateways
+			const self = selfGateway ? `<div class="peer"><div class="name">This node</div><span class="badge direct">sharing its uplink</span></div>` : "";
+			const gws = d.gateways.filter((g) => !lostMacs.has(g.mac));
+			$("gws").innerHTML = self + (gws.length
+				? gws.map((g) => `<div class="peer">
+					<div class="name">${g.ip ? `<a href="http://${esc(g.ip)}/">${esc(g.ip)}</a>` : esc(g.mac)}</div>
+					${g.selected ? '<span class="badge direct">in use</span>' : ""}
+					${g.ip ? `<div class="meta">${esc(g.mac)}</div>` : ""}</div>`).join("")
+				: (self ? "" : `<p class="empty">No gateway announced in the mesh.</p>`));
+		});
+	</script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- radio mast with signal arcs, inside the 72dp safe zone of the 108dp adaptive icon -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,46a5,5 0,1 1,0 10a5,5 0,1 1,0 -10z M51.5,56h5l6,20h-17z" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M42,39a17,17 0,0 0,0 24 M66,39a17,17 0,0 1,0 24 M35,32a27,27 0,0 0,0 38 M73,32a27,27 0,0 1,0 38" />
+</vector>

@@ -1,0 +1,16 @@
+# Installed as /etc/default/ina226d (only if missing: board-specific)
+# I2C1 on the Lyra header: SCL = B4, SDA = B5
+INA226_I2C=/dev/i2c-1
+# auto: search 0x40..0x4F for the INA226 (its A0/A1 pins pick the address); a fixed address
+# (e.g. 0x41) is tried first and still falls back to the search
+INA226_ADDR=auto
+# calibration, as in rp/ina226_demo: 0.1 ohm shunt, 0.8 A full scale
+INA226_SHUNT_OHM=0.1
+INA226_MAX_CURRENT_A=0.8
+# averaging code 0..7 = 1, 4, 16, 64, 128, 256, 512, 1024 samples
+INA226_AVERAGE=3
+INA226_INTERVAL_MS=1000
+# Li-ion cells in series (2 = 2S pack): the web UI shows the charge estimated from the voltage
+INA226_CELLS=2
+# the pack's capacity: the runtime estimate on the Info page is calculated from it
+INA226_CAPACITY_MAH=2600

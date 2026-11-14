@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>ERL Settings</title>
+	<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+	<header>
+		<h1><span id="dot" class="dot"></span> ERL Settings<span id="power" class="power" hidden></span></h1>
+		<nav>
+			<a href="/">Node</a>
+			<a href="/mesh.html">Mesh</a>
+			<a href="/peers.html">Peers</a>
+			<a href="/chat.html">Chat</a>
+			<a href="/erl.html" class="active">ERL</a>
+			<a href="/info.html">Info</a>
+			<a href="/exp.html">Test</a>
+		</nav>
+	</header>
+
+	<main>
+		<section class="card">
+			<h2>Emergency unit</h2>
+			<dl>
+				<dt>Link</dt><dd id="link">–</dd>
+				<dt>Network address</dt><dd id="cur-address">–</dd>
+				<dt>Subnet mask</dt><dd id="cur-mask">–</dd>
+			</dl>
+		</section>
+
+		<section class="card">
+			<h2>ERL network</h2>
+			<form id="form" class="form" autocomplete="off">
+				<label>
+					<span>Network address</span>
+					<input id="address" name="address" inputmode="text" placeholder="0xC701" required>
+				</label>
+				<label>
+					<span>Subnet mask</span>
+					<input id="mask" name="mask" inputmode="text" placeholder="0xFFE0" required>
+				</label>
+				<dl id="calc" class="calc"></dl>
+				<p id="problem" class="problem" hidden></p>
+				<button id="save" type="submit">Save to emergency unit</button>
+				<p id="result" class="result" hidden></p>
+			</form>
+		</section>
+
+		<section class="card">
+			<h2>Clear data</h2>
+			<div class="danger-actions">
+				<button id="clear-chat" type="button" class="btn-danger">Clear all chat</button>
+				<button id="clear-peers" type="button" class="btn-danger">Clear all peers</button>
+			</div>
+			<p id="clear-result" class="result" hidden></p>
+		</section>
+	</main>
+
+	<div id="confirm" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+		<div class="modal-box">
+			<h2 id="confirm-title"></h2>
+			<p id="confirm-text"></p>
+			<div class="modal-buttons">
+				<button id="confirm-no" type="button" class="modal-no">Cancel</button>
+				<button id="confirm-yes" type="button" class="modal-yes"></button>
+			</div>
+		</div>
+	</div>
+
+	<footer id="updated">Connecting…</footer>
+
+	<script src="/app.js"></script>
+	<script>
+		// ERL addresses are 16 bit; a node's peer table has 32 slots (NETWORK_MAX_PEERS),
+		// indexed by the host part, so more than 5 host bits cannot all be tracked.
+		const MAX_HOST_BITS = 5;
+		const hex = (v) => "0x" + v.toString(16).toUpperCase().padStart(4, "0");
+
+		function parse16(text) {
+			text = text.trim();
+			if (!/^(0[xX][0-9a-fA-F]{1,4}|[0-9]{1,5})$/.test(text)) return null;
+			const value = Number(text);
+			return value <= 0xFFFF ? value : null;
+		}
+
+		// Returns [problem or null, derived info]
+		function check(address, mask) {
+			if (address === null) return ["Address must be a 16-bit number, e.g. 0xC701.", []];
+			if (mask === null) return ["Subnet mask must be a 16-bit number, e.g. 0xFFE0.", []];
+			// contiguous: the host part (inverted mask) is 2^n - 1
+			const hostPart = ~mask & 0xFFFF;
+			if (hostPart & (hostPart + 1))
+				return ["Subnet mask must be ones followed by zeros, e.g. 0xFFE0.", []];
+			const hostBits = Math.log2(hostPart + 1);
+			const host = address & ~mask & 0xFFFF;
+			const broadcast = (address | ~mask) & 0xFFFF;
+			const info = [
+				["Subnet", hex(address & mask)],
+				["Host id", String(host)],
+				["Broadcast", hex(broadcast)],
+				["Nodes in subnet", String(Math.max((1 << hostBits) - 2, 0))],
+			];
+			if (hostBits < 2) return ["Subnet mask leaves no room for nodes.", info];
+			if (host === 0) return ["Host id 0 is the subnet itself, pick another address.", info];
+			if (address === broadcast) return ["That is the broadcast address of the subnet, pick another address.", info];
+			if (hostBits > MAX_HOST_BITS)
+				return [`A node tracks at most 32 peers; masks with more than ${MAX_HOST_BITS} host bits (wider than 0xFFE0) are not supported.`, info];
+			return [null, info];
+		}
+
+		let linkUp = false;
+		let edited = false;
+
+		function refreshCheck() {
+			const [problem, info] = check(parse16($("address").value), parse16($("mask").value));
+			$("calc").innerHTML = info.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("");
+			$("problem").hidden = !problem;
+			$("problem").textContent = problem || "";
+			$("save").disabled = !!problem || !linkUp;
+		}
+
+		function showResult(ok, text) {
+			const el = $("result");
+			el.hidden = false;
+			el.className = "result " + (ok ? "ok" : "bad");
+			el.textContent = text;
+		}
+
+		async function load() {
+			try {
+				const res = await fetch("/cgi-bin/merl", { cache: "no-store" });
+				const data = await res.json();
+				setOnline(true);
+				const s = data.state || {};
+				const labels = { up: "connected", down: "not answering", unknown: "connecting…", "no-tty": `no UART (${s.tty || "?"})` };
+				linkUp = s.link === "up";
+				$("link").textContent = data.ok ? (labels[s.link] || s.link) : (data.error || "unavailable");
+				$("link").className = linkUp ? "good" : "warn";
+				$("cur-address").textContent = s.network ? s.network.address : "–";
+				$("cur-mask").textContent = s.network ? s.network.subnet_mask : "–";
+				// prefill once, then leave the user's input alone
+				if (s.network && !edited) {
+					$("address").value = s.network.address;
+					$("mask").value = s.network.subnet_mask;
+				}
+				refreshCheck();
+				$("updated").textContent = "Updated " + new Date().toLocaleTimeString();
+			} catch (e) {
+				setOnline(false);
+			}
+			setTimeout(load, POLL_MS);
+		}
+
+		$("address").addEventListener("input", () => { edited = true; refreshCheck(); });
+		$("mask").addEventListener("input", () => { edited = true; refreshCheck(); });
+
+		$("form").addEventListener("submit", async (event) => {
+			event.preventDefault();
+			const address = parse16($("address").value);
+			const mask = parse16($("mask").value);
+			if (check(address, mask)[0]) return;
+			$("save").disabled = true;
+			try {
+				const body = new URLSearchParams({ action: "network", address: hex(address), mask: hex(mask) });
+				const res = await fetch("/cgi-bin/merl", { method: "POST", body });
+				const data = await res.json();
+				if (data.ok) {
+					edited = false;
+					showResult(true, `Saved: ${hex(address)} / ${hex(mask)}. The emergency unit stored it in flash.`);
+				} else {
+					showResult(false, "Not saved: " + (data.error || data.answer || "unknown error"));
+				}
+			} catch (e) {
+				showResult(false, "Not saved: node not responding.");
+			}
+			refreshCheck();
+		});
+
+		// ---- clear chat / peers, after a confirmation ------------------------------------------
+		const CLEAR = {
+			chat: {
+				title: "Clear all chat?",
+				text: "Every message on this node (sent and received) is deleted for good. Other nodes keep their own history.",
+				yes: "Yes, clear chat",
+				url: "/cgi-bin/chat",
+				done: (d) => `Chat cleared: ${d.deleted} message${d.deleted === 1 ? "" : "s"} deleted.`,
+			},
+			peers: {
+				title: "Clear all peers?",
+				text: "The emergency unit forgets every ERL peer it has heard. Peers that are still in range come back with their next heartbeat (every few seconds).",
+				yes: "Yes, clear peers",
+				url: "/cgi-bin/merl",
+				done: () => "Peer table cleared.",
+			},
+		};
+		let pending = null;         // which one the dialog is for
+		let opener = null;
+
+		function openConfirm(kind, button) {
+			const c = CLEAR[kind];
+			pending = kind;
+			opener = button;
+			$("confirm-title").textContent = c.title;
+			$("confirm-text").textContent = c.text;
+			$("confirm-yes").textContent = c.yes;
+			$("confirm").hidden = false;
+			$("confirm-no").focus();            // the safe choice has the focus
+		}
+		function closeConfirm() {
+			$("confirm").hidden = true;
+			pending = null;
+			if (opener) opener.focus();
+		}
+		function showClearResult(ok, text) {
+			const el = $("clear-result");
+			el.hidden = false;
+			el.className = "result " + (ok ? "ok" : "bad");
+			el.textContent = text;
+		}
+		async function doClear() {
+			const kind = pending;
+			const c = CLEAR[kind];
+			closeConfirm();
+			const button = $(`clear-${kind}`);
+			button.disabled = true;
+			try {
+				const action = kind === "chat" ? "clear" : "peers-clear";
+				const res = await fetch(c.url, { method: "POST", body: new URLSearchParams({ action }) });
+				const d = await res.json();
+				showClearResult(d.ok, d.ok ? c.done(d) : "Not cleared: " + (d.error || d.answer || "unknown error"));
+			} catch (e) {
+				showClearResult(false, "Not cleared: node not responding.");
+			}
+			button.disabled = false;
+		}
+		$("clear-chat").addEventListener("click", (e) => openConfirm("chat", e.currentTarget));
+		$("clear-peers").addEventListener("click", (e) => openConfirm("peers", e.currentTarget));
+		$("confirm-no").addEventListener("click", closeConfirm);
+		$("confirm-yes").addEventListener("click", doClear);
+		// a tap outside the box or Escape is a Cancel
+		$("confirm").addEventListener("click", (e) => { if (e.target === $("confirm")) closeConfirm(); });
+		document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("confirm").hidden) closeConfirm(); });
+
+		load();
+	</script>
+</body>
+</html>

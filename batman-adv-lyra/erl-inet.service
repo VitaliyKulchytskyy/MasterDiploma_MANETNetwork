@@ -1,0 +1,11 @@
+[Unit]
+Description=Internet status for the web UI (+ gateway announcement on mesh gateways)
+After=network.target mesh.service
+
+[Service]
+ExecStart=/usr/local/sbin/erl-inet
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

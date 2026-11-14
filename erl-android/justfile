@@ -1,0 +1,32 @@
+APK := "app/build/outputs/apk/debug/app-debug.apk"
+PACKAGE := "com.erl.node"
+
+# phone adb target, override with: just serial=<id> <recipe> (e.g. a wireless-debugging ip:port)
+serial := ""
+ADB := if serial == "" { "adb" } else { "adb -s " + serial }
+
+alias b := build
+alias i := install
+alias r := run
+
+default:
+    @just --list
+
+# Build the debug APK
+build:
+    ./gradlew assembleDebug --console=plain
+
+# Install on the phone (USB or wireless debugging: adb pair / adb connect first)
+install: build
+    {{ADB}} install -r {{APK}}
+
+# Install and start the app
+run: install
+    {{ADB}} shell am start -n {{PACKAGE}}/.MainActivity
+
+# App log (network binding, page loads)
+log:
+    {{ADB}} logcat --pid=`{{ADB}} shell pidof {{PACKAGE}}`
+
+clean:
+    ./gradlew clean

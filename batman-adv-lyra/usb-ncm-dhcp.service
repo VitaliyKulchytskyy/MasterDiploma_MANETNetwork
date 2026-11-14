@@ -1,0 +1,25 @@
+[Unit]
+Description=DHCP + DNS for the phone on the USB link
+Requires=usb-ncm.service
+After=usb-ncm.service
+# Follow usb-ncm restarts: switching ecm/ncm changes the interface dnsmasq binds to
+PartOf=usb-ncm.service
+
+[Service]
+EnvironmentFile=/run/usb-ncm.env
+# Android phones (vendor class android-dhcp-*) get this board as router and DNS: with the
+# -erl kernel the board shares its internet (mesh gateway / own uplink) with the phone
+# (usb-ncm share_up), Android validates the USB link and prefers it over mobile data, so
+# the web UI stays reachable in the browser. DNS is forwarded to the board's own servers;
+# erl.lan names the board. Other hosts (e.g. a PC) get no router/DNS, so their own internet
+# is untouched.
+ExecStart=/usr/sbin/dnsmasq -k --interface=${NCM_IF} --bind-interfaces --except-interface=lo \
+	--no-hosts --resolv-file=/run/systemd/resolve/resolv.conf --address=/erl.lan/192.168.7.1 \
+	--dhcp-range=192.168.7.10,192.168.7.50,255.255.255.0,1h --dhcp-leasefile=/run/usb-ncm.leases \
+	--dhcp-vendorclass=set:phone,android-dhcp \
+	--dhcp-option=tag:phone,3,192.168.7.1 --dhcp-option=tag:phone,6,192.168.7.1 \
+	--dhcp-option=tag:!phone,3 --dhcp-option=tag:!phone,6
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

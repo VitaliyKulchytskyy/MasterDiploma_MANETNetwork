@@ -1,0 +1,15 @@
+[Unit]
+Description=MERL master: link to the emergency unit (RP2040)
+
+[Service]
+# MERL_TTY, MERL_BAUDRATE, MERL_POLL_MS, ...: see merld.default
+EnvironmentFile=-/etc/default/merld
+ExecStart=/usr/local/sbin/merld
+# /run/merl: state.json + control socket; /var/lib/merl: message history
+RuntimeDirectory=merl
+StateDirectory=merl
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
